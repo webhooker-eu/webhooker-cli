@@ -55,4 +55,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, compact: bool) {
         ]
     };
     frame.render_widget(Paragraph::new(lines), area);
+    // The relay indicator sits on the header's last row, right-aligned.
+    if let Some(indicator) = super::relay::indicator(app) {
+        let width = (indicator.width() as u16).min(area.width);
+        let row = area.y + area.height.saturating_sub(1);
+        let column = (area.x + area.width).saturating_sub(width + 1).max(area.x);
+        frame.render_widget(Paragraph::new(indicator), Rect::new(column, row, width, 1));
+    }
 }

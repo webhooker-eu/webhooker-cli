@@ -15,7 +15,7 @@ mod header;
 mod help;
 mod live;
 mod login;
-mod placeholder;
+mod relay;
 mod settings;
 mod sidebar;
 mod source_detail;
@@ -99,7 +99,7 @@ fn render_screen(frame: &mut Frame, area: Rect, app: &App) {
         Screen::EventDetail { .. } => event_detail::render(frame, area, app),
         Screen::Dlq => dlq::render(frame, area, app),
         Screen::Stats => stats::render(frame, area, app),
-        Screen::Relay => placeholder::render(frame, area, app),
+        Screen::Relay => relay::render(frame, area, app),
         Screen::Login => {}
     }
 }

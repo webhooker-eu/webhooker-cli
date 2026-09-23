@@ -615,3 +615,117 @@ fn event_screens_are_ascii_clean_in_ascii_mode() {
         }
     }
 }
+
+use crate::tui::relay_session::RelayConnection;
+
+fn relay_on_screen() -> App {
+    fixtures::relay_app()
+}
+
+#[test]
+fn relay_screen_without_a_session() {
+    let mut app = fixtures::app();
+    app.switch_to(Section::Relay);
+    snapshot_both_sizes("relay_empty", &app);
+    assert!(screen_text(&app, 120, 40)
+        .contains("No relay running. Press n to start one, or L on a source."));
+}
+
+#[test]
+fn relay_inspector() {
+    let app = relay_on_screen();
+    snapshot_both_sizes("relay_inspector", &app);
+    let text = screen_text(&app, 120, 40);
+    for expected in [
+        "Relay · stripe-prod → http://localhost:3000",
+        "2 fwd · 1 err",
+        "connected",
+        "12:04:11",
+        "evt_8f2a…",
+        "→ 200",
+        "34ms",
+        "→ 500",
+        "✕ connection refused",
+        "Request",
+        "Response",
+        "500 Internal Server Error",
+        "p replay locally · u change URL · x stop · enter expand · / search",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?} in\n{text}");
+    }
+}
+
+#[test]
+fn the_expanded_exchange_shows_headers_and_bodies() {
+    let mut app = relay_on_screen();
+    app.relay.as_mut().unwrap().expanded = true;
+    assert_snapshot!("relay_expanded_120x40", draw(&app, 120, 40).backend());
+    let text = screen_text(&app, 120, 40);
+    for expected in [
+        "POST http://localhost:3000",
+        "stripe-signature: t=1,v1=abc",
+        "x-webhooker-event-id: evt_77c1d05e9a",
+        "\"type\": \"invoice.paid\"",
+        "\"error\": \"db timeout\"",
+        "120ms",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?} in\n{text}");
+    }
+    assert!(
+        !text.contains("host: app.webhooker.eu"),
+        "hop-by-hop headers are not sent"
+    );
+}
+
+#[test]
+fn the_header_shows_the_relay_on_every_screen() {
+    let mut app = relay_on_screen();
+    app.switch_to(Section::Stats);
+    assert!(screen_text(&app, 120, 40).contains("⇄ relay stripe-prod → :3000 ●"));
+    assert!(screen_text(&app, 100, 18).contains("⇄ relay stripe-prod → :3000 ●"));
+    assert!(!screen_text(&fixtures::app(), 120, 40).contains("relay stripe-prod"));
+}
+
+#[test]
+fn a_refused_stream_slot_is_explained_in_the_inspector() {
+    let mut app = relay_on_screen();
+    app.relay.as_mut().unwrap().connection = RelayConnection::Reconnecting {
+        reason: "no live stream slot: the plan's live stream limit is reached".into(),
+        server_message: Some("live stream limit reached for your plan (3)".into()),
+    };
+    let text = screen_text(&app, 120, 40);
+    assert!(text.contains("live stream limit reached for your plan (3)"));
+    assert!(text.contains("⇄ relay stripe-prod → :3000 ⠋"));
+}
+
+#[test]
+fn a_failed_relay_is_marked_in_the_header() {
+    let mut app = relay_on_screen();
+    app.relay.as_mut().unwrap().connection = RelayConnection::Failed("source not found".into());
+    let text = screen_text(&app, 120, 40);
+    assert!(text.contains("⇄ relay stripe-prod → :3000 ✕"));
+    assert!(text.contains("stopped: source not found"));
+}
+
+#[test]
+fn the_relay_views_are_ascii_clean_in_ascii_mode() {
+    let app = ascii(relay_on_screen());
+    let text = screen_text(&app, 120, 40);
+    assert!(text.is_ascii(), "{text}");
+    assert!(text.contains("<> relay stripe-prod -> :3000 *"));
+    let mut expanded = relay_on_screen();
+    expanded.relay.as_mut().unwrap().expanded = true;
+    assert!(screen_text(&ascii(expanded), 120, 40).is_ascii());
+}
+
+#[test]
+fn targets_are_shortened_for_the_header() {
+    use super::relay::short_target;
+    assert_eq!(short_target("http://localhost:3000"), ":3000");
+    assert_eq!(short_target("http://127.0.0.1:8080/hooks"), ":8080");
+    assert_eq!(
+        short_target("https://tunnel.example.com/in"),
+        "tunnel.example.com"
+    );
+    assert_eq!(short_target("http://localhost"), ":80");
+}
