@@ -7,3 +7,4 @@ pub mod output;
 pub mod relay;
 pub mod sse;
 pub mod tail;
+pub mod tui;
