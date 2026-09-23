@@ -106,6 +106,9 @@ pub async fn run(options: LaunchOptions) -> Result<()> {
 
     let mut terminal = ratatui::init();
     let outcome = event_loop(&mut terminal, &mut app, &worker, &mut received).await;
+    // Quit, SIGTERM/SIGHUP and window close all end the loop here; the
+    // stream slot is freed before the terminal comes back.
+    worker.stop_relay();
     ratatui::restore();
 
     remember_last_screen(&app, &options.config_path);
