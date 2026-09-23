@@ -134,6 +134,9 @@ fn on_sidebar_key(app: &mut App, code: KeyCode) -> Vec<Effect> {
 }
 
 fn on_main_key(app: &mut App, code: KeyCode) -> Vec<Effect> {
+    if let Some(effects) = crate::tui::crud::handle_key(app, code) {
+        return effects;
+    }
     match app.screen.clone() {
         Screen::Sources => on_sources_key(app, code),
         Screen::SourceDetail { tab, .. } => on_source_detail_key(app, code, tab),
@@ -457,6 +460,12 @@ pub fn submit_modal(app: &mut App) -> Vec<Effect> {
         }
         FormPurpose::Relay => crate::tui::relay_control::submit_start(app),
         FormPurpose::RelayTarget => crate::tui::relay_control::submit_retarget(app),
+        FormPurpose::CreateSource
+        | FormPurpose::EditSource { .. }
+        | FormPurpose::CreateDestination
+        | FormPurpose::EditDestination { .. }
+        | FormPurpose::CreateConnection
+        | FormPurpose::EditConnection { .. } => crate::tui::crud::submit(app),
     }
 }
 

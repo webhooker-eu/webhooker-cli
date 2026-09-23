@@ -219,6 +219,18 @@ pub enum FormPurpose {
     },
     Relay,
     RelayTarget,
+    CreateSource,
+    EditSource {
+        id: String,
+    },
+    CreateDestination,
+    EditDestination {
+        id: String,
+    },
+    CreateConnection,
+    EditConnection {
+        id: String,
+    },
 }
 
 #[derive(Debug, Clone)]
