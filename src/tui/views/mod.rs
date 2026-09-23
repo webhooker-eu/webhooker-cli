@@ -1,8 +1,11 @@
 //! Pure rendering: `render` draws the whole frame from `&App`.
 
-#[allow(dead_code)]
 mod common;
 mod confirm;
+mod connection_detail;
+mod connections;
+mod destination_detail;
+mod destinations;
 mod header;
 mod help;
 mod login;
@@ -77,7 +80,14 @@ fn render_screen(frame: &mut Frame, area: Rect, app: &App) {
     match &app.screen {
         Screen::Sources => sources::render(frame, area, app),
         Screen::SourceDetail { tab, .. } => source_detail::render(frame, area, app, *tab),
+        Screen::Destinations => destinations::render(frame, area, app),
+        Screen::DestinationDetail { .. } => destination_detail::render(frame, area, app),
+        Screen::Connections => connections::render(frame, area, app),
+        Screen::ConnectionDetail { .. } => connection_detail::render(frame, area, app),
         Screen::Settings => settings::render(frame, area, app),
-        _ => placeholder::render(frame, area, app),
+        Screen::Events | Screen::Dlq | Screen::Stats | Screen::Relay => {
+            placeholder::render(frame, area, app)
+        }
+        Screen::Login => {}
     }
 }

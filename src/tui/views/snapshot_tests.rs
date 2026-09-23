@@ -11,6 +11,7 @@ use super::render;
 use crate::tui::app::{App, Confirm, ConfirmAction};
 use crate::tui::fixtures;
 use crate::tui::forms::input::TextInput;
+use crate::tui::screen::Screen;
 use crate::tui::screen::Section;
 use crate::tui::screen::SourceTab;
 use crate::tui::settings::ThemeChoice;
@@ -271,4 +272,95 @@ fn source_connections_tab() {
 fn later_tabs_say_they_are_not_available_yet() {
     let app = fixtures::source_detail(SourceTab::Live);
     assert!(screen_text(&app, 120, 40).contains("This tab is not available yet."));
+}
+
+fn on(screen: Screen) -> App {
+    let mut app = fixtures::app();
+    app.screen = screen;
+    app
+}
+
+#[test]
+fn destinations_list() {
+    let app = on(Screen::Destinations);
+    snapshot_both_sizes("destinations", &app);
+    let text = screen_text(&app, 120, 40);
+    assert!(text.contains("billing-worker"));
+    assert!(text.contains("billing.internal"));
+    // ⚡ is two columns wide, so the buffer holds a padding cell after it.
+    assert!(text.contains('⚡') && text.contains(" open"));
+}
+
+#[test]
+fn destination_detail() {
+    let app = fixtures::destination_detail();
+    snapshot_both_sizes("destination_detail", &app);
+    let text = screen_text(&app, 120, 40);
+    for expected in [
+        "https://billing.internal/hooks",
+        "X-Env: prod",
+        "hmac (secret ***)",
+        "10000 ms",
+        "30s · 2m · 10m · 1h · 4h",
+        "Fed by",
+        "stripe-prod",
+        "github-ci",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?} in\n{text}");
+    }
+}
+
+#[test]
+fn connections_list() {
+    let app = on(Screen::Connections);
+    snapshot_both_sizes("connections", &app);
+    let text = screen_text(&app, 120, 40);
+    assert!(text.contains("stripe-prod → billing-worker"));
+    assert!(text.contains("filter"));
+}
+
+#[test]
+fn connection_detail() {
+    let app = fixtures::connection_detail();
+    snapshot_both_sizes("connection_detail", &app);
+    let text = screen_text(&app, 120, 40);
+    assert!(text.contains("\"invoice.paid\""));
+    assert!(text.contains("Transformation"));
+    assert!(text.contains("none"));
+}
+
+#[test]
+fn long_detail_panes_clamp_their_scroll() {
+    let mut app = fixtures::connection_detail();
+    app.scroll = 500;
+    screen_text(&app, 80, 15);
+    assert!(app.scroll_limit.get() < 500);
+}
+
+#[test]
+fn every_screen_is_ascii_clean_in_ascii_mode() {
+    let mut help = fixtures::app();
+    help.help_open = true;
+    let mut settings = fixtures::app();
+    settings.switch_to(Section::Settings);
+    let mut login = App::new(fixtures::init(false));
+    login.start();
+    login.login.api_key.set("whk_secret");
+    let screens = [
+        fixtures::app(),
+        fixtures::source_detail(SourceTab::Overview),
+        fixtures::source_detail(SourceTab::Connections),
+        on(Screen::Destinations),
+        fixtures::destination_detail(),
+        on(Screen::Connections),
+        fixtures::connection_detail(),
+        settings,
+        login,
+        help,
+    ];
+    for app in screens {
+        let screen = app.screen.clone();
+        let text = screen_text(&ascii(app), 120, 40);
+        assert!(text.is_ascii(), "{screen:?} is not ASCII:\n{text}");
+    }
 }

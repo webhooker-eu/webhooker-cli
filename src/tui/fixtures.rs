@@ -1,5 +1,4 @@
 //! Deterministic app states for update, key and render tests.
-#![allow(dead_code)]
 
 use std::time::{Duration, Instant};
 
