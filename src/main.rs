@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use whk::commands::{connections, destinations, events, sources};
+use whk::commands::{connections, destinations, dlq, events, sources};
 use whk::{args, client, config, listen, tail};
 
 #[derive(Parser)]
@@ -81,6 +81,11 @@ enum Command {
     Events {
         #[command(subcommand)]
         command: EventCommand,
+    },
+    /// Inspect and resend dead-lettered deliveries
+    Dlq {
+        #[command(subcommand)]
+        command: DlqCommand,
     },
     /// Remove the saved credentials
     Logout,
@@ -300,6 +305,48 @@ enum EventCommand {
     },
 }
 
+#[derive(Subcommand)]
+enum DlqCommand {
+    /// Dead-lettered delivery counts per connection of one source
+    Summary {
+        /// Source name, id or ingest token
+        source: String,
+    },
+    /// List one source's dead-lettered deliveries
+    #[command(alias = "list")]
+    Ls {
+        /// Source name, id or ingest token
+        source: String,
+        /// exhausted, failed or both (comma-separated or repeated); defaults to both
+        #[arg(long = "status", value_delimiter = ',')]
+        statuses: Vec<String>,
+        /// RFC 3339 timestamp, e.g. 2026-09-20T10:00:00Z
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
+        until: Option<String>,
+        /// Match on event public id, destination name/url or last error
+        #[arg(short = 'q', long = "query", alias = "search")]
+        search: Option<String>,
+        #[arg(long)]
+        page: Option<i64>,
+        #[arg(long)]
+        limit: Option<i64>,
+    },
+    /// Re-queue one connection's dead-lettered deliveries
+    Resend {
+        #[arg(long = "connection")]
+        connection_id: String,
+        /// Delivery statuses to resend (comma-separated or repeated); defaults to exhausted
+        #[arg(long = "status", value_delimiter = ',')]
+        statuses: Vec<String>,
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
+        until: Option<String>,
+    },
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let Cli {
@@ -365,6 +412,9 @@ async fn main() -> Result<()> {
         }
         Command::Events { command } => {
             run_event_command(connect(&server, &api_key)?, command, json).await
+        }
+        Command::Dlq { command } => {
+            run_dlq_command(connect(&server, &api_key)?, command, json).await
         }
     }
 }
@@ -567,6 +617,47 @@ async fn run_event_command(
             until,
         } => {
             events::replay_bulk(
+                &client,
+                &connection_id,
+                &statuses,
+                since.as_deref(),
+                until.as_deref(),
+                json,
+            )
+            .await
+        }
+    }
+}
+
+async fn run_dlq_command(client: client::ApiClient, command: DlqCommand, json: bool) -> Result<()> {
+    match command {
+        DlqCommand::Summary { source } => dlq::summary(&client, &source, json).await,
+        DlqCommand::Ls {
+            source,
+            statuses,
+            since,
+            until,
+            search,
+            page,
+            limit,
+        } => {
+            let filters = dlq::ListFilters {
+                statuses: &statuses,
+                since: since.as_deref(),
+                until: until.as_deref(),
+                search: search.as_deref(),
+                page,
+                limit,
+            };
+            dlq::list(&client, &source, filters, json).await
+        }
+        DlqCommand::Resend {
+            connection_id,
+            statuses,
+            since,
+            until,
+        } => {
+            dlq::resend(
                 &client,
                 &connection_id,
                 &statuses,

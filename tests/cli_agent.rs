@@ -81,3 +81,115 @@ async fn whk_secret_supplies_the_preset_secret() {
     assert!(output.status.success(), "{}", stderr_of(&output));
     assert!(stdout_of(&output).contains("stripe"));
 }
+
+const SOURCE_ID: &str = "0198c9f0-0000-7000-8000-00000000000a";
+
+async fn mount_sources(server: &MockServer) {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, ResponseTemplate};
+    Mock::given(method("GET"))
+        .and(path("/api/v1/sources/"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "items": [{"id": SOURCE_ID, "name": "stripe-prod", "token": "tok"}],
+            "total": 1
+        })))
+        .mount(server)
+        .await;
+}
+
+#[tokio::test]
+async fn dlq_summary_prints_a_table_and_raw_json() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    mount_sources(&server).await;
+    let summary = serde_json::json!({"items": [{
+        "connection_id": "c1",
+        "destination_name": "billing",
+        "exhausted_count": 4,
+        "failed_count": 1
+    }]});
+    Mock::given(method("GET"))
+        .and(path(format!("/api/v1/sources/{SOURCE_ID}/dlq/summary")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(summary.clone()))
+        .mount(&server)
+        .await;
+
+    let text = run_whk(&server.uri(), &["dlq", "summary", "stripe-prod"], None).await;
+    assert!(text.status.success(), "{}", stderr_of(&text));
+    assert_eq!(
+        stdout_of(&text),
+        "CONNECTION  DESTINATION  EXHAUSTED  FAILED\nc1          billing      4          1\n"
+    );
+
+    let json = run_whk(
+        &server.uri(),
+        &["--json", "dlq", "summary", "stripe-prod"],
+        None,
+    )
+    .await;
+    let parsed: serde_json::Value = serde_json::from_str(stdout_of(&json).trim()).unwrap();
+    assert_eq!(parsed, summary);
+}
+
+#[tokio::test]
+async fn dlq_ls_passes_the_status_filter() {
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    mount_sources(&server).await;
+    Mock::given(method("GET"))
+        .and(path(format!("/api/v1/sources/{SOURCE_ID}/dlq")))
+        .and(query_param("status", "exhausted"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "items": [], "total": 0
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = run_whk(
+        &server.uri(),
+        &["dlq", "ls", "stripe-prod", "--status", "exhausted"],
+        None,
+    )
+    .await;
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    assert_eq!(stdout_of(&output), "(none)\n");
+}
+
+#[tokio::test]
+async fn dlq_resend_posts_a_bulk_resend() {
+    use wiremock::matchers::{body_json, method, path};
+    use wiremock::{Mock, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/deliveries/resend-bulk"))
+        .and(body_json(serde_json::json!({
+            "connection_id": "c1",
+            "statuses": ["exhausted", "failed"]
+        })))
+        .respond_with(ResponseTemplate::new(202).set_body_json(serde_json::json!({"created": 3})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = run_whk(
+        &server.uri(),
+        &[
+            "dlq",
+            "resend",
+            "--connection",
+            "c1",
+            "--status",
+            "exhausted,failed",
+        ],
+        None,
+    )
+    .await;
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    assert_eq!(stdout_of(&output), "Queued 3 delivery(ies)\n");
+}
