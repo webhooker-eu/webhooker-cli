@@ -249,6 +249,10 @@ pub enum Action {
         subscription: u64,
         status: StreamStatus,
     },
+    JsonEdited {
+        field_key: &'static str,
+        result: Result<crate::tui::editor::EditOutcome, String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -283,6 +287,15 @@ pub enum Effect {
     ReplayLocally(LocalReplay),
     /// Writes `[ui.state] last_relay_url`; only into an existing config file.
     RememberRelayUrl(String),
+    /// Run by the event loop: suspend the terminal, open `$EDITOR`.
+    EditJson {
+        field_key: &'static str,
+        text: String,
+    },
+    /// Run by the event loop: write an OSC 52 sequence between frames.
+    CopyToClipboard {
+        text: String,
+    },
 }
 
 #[cfg(test)]

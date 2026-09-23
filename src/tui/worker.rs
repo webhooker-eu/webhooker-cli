@@ -152,6 +152,8 @@ impl Worker {
                 }
             }
             Effect::StopRelay => self.stop_relay(),
+            // Both need the terminal, so the event loop runs them.
+            Effect::EditJson { .. } | Effect::CopyToClipboard { .. } => {}
             Effect::RetargetRelay(url) => {
                 if let Some(handle) = shared.relay.lock().unwrap().as_ref() {
                     handle.retarget(url);

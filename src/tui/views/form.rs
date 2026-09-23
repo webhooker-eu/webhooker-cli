@@ -70,6 +70,14 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, form: &Form) {
                 ));
                 lines.push(Line::from(spans));
             }
+            FieldKind::Json { value, .. } => {
+                let mut spans = head;
+                spans.push(Span::styled(
+                    crate::tui::forms::form::json_summary(value, 40),
+                    theme.fg(Tone::Text),
+                ));
+                lines.push(Line::from(spans));
+            }
             FieldKind::Checklist {
                 items,
                 cursor: item_cursor,

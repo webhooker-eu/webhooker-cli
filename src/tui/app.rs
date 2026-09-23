@@ -847,6 +847,9 @@ pub fn update(app: &mut App, action: Action) -> Vec<Effect> {
         Action::Relay { session, update } => {
             crate::tui::relay_control::on_update(app, session, update)
         }
+        Action::JsonEdited { field_key, result } => {
+            crate::tui::crud::on_json_edited(app, field_key, result)
+        }
         Action::Terminate => {
             // Signals never ask: stop the relay first, then quit.
             app.quit = true;

@@ -143,7 +143,7 @@ impl HeadersEditor {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum FieldKind {
     Text(TextInput),
     /// Masked; on edit the caller treats "" as "keep the current one".
@@ -158,6 +158,13 @@ pub enum FieldKind {
         cursor: usize,
     },
     Headers(HeadersEditor),
+    /// Edited in `$EDITOR`; `text` is what the editor last produced (it may
+    /// not parse), `value` the last valid value, `error` the parse error.
+    Json {
+        text: String,
+        value: serde_json::Value,
+        error: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -167,9 +174,10 @@ pub enum FieldValue {
     Selected(String),
     Checked(Vec<String>),
     Headers(Vec<(String, String)>),
+    Json(serde_json::Value),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Field {
     pub key: &'static str,
     pub label: String,
@@ -223,6 +231,19 @@ impl Field {
         Self::with_kind(key, label, FieldKind::Headers(HeadersEditor::new(pairs)))
     }
 
+    pub fn json(key: &'static str, label: impl Into<String>, value: serde_json::Value) -> Self {
+        let text = crate::tui::editor::text_for(&value);
+        Self::with_kind(
+            key,
+            label,
+            FieldKind::Json {
+                text,
+                value,
+                error: None,
+            },
+        )
+    }
+
     pub fn value(&self) -> FieldValue {
         match &self.kind {
             FieldKind::Text(input) | FieldKind::Secret(input) => {
@@ -243,6 +264,7 @@ impl Field {
                     .collect(),
             ),
             FieldKind::Headers(editor) => FieldValue::Headers(editor.loose_pairs()),
+            FieldKind::Json { value, .. } => FieldValue::Json(value.clone()),
         }
     }
 
@@ -338,6 +360,8 @@ impl Field {
                 _ => false,
             },
             FieldKind::Headers(editor) => editor.handle(key),
+            // Enter opens the editor through a key hook before the form sees it.
+            FieldKind::Json { .. } => false,
         }
     }
 }
@@ -458,6 +482,14 @@ impl Form {
         }
     }
 
+    /// The last valid value of a JSON field.
+    pub fn json(&self, key: &str) -> Option<&serde_json::Value> {
+        match self.field(key).map(|field| &field.kind) {
+            Some(FieldKind::Json { value, .. }) => Some(value),
+            _ => None,
+        }
+    }
+
     pub fn is_dirty(&self) -> bool {
         self.fields
             .iter()
@@ -476,6 +508,20 @@ impl Form {
         for field in &mut self.fields {
             field.error = None;
         }
+    }
+}
+
+/// One line for the form: a compact value, or a hint when empty.
+pub fn json_summary(value: &serde_json::Value, width: usize) -> String {
+    if value.is_null() {
+        return "empty (enter to edit)".to_string();
+    }
+    let compact = value.to_string();
+    if compact.chars().count() <= width {
+        compact
+    } else {
+        let kept: String = compact.chars().take(width.saturating_sub(3)).collect();
+        format!("{kept}...")
     }
 }
 

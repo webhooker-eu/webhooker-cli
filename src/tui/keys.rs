@@ -27,6 +27,9 @@ pub fn handle(app: &mut App, key: KeyEvent) -> Vec<Effect> {
     if let Some(confirm) = app.confirm.take() {
         return on_confirm_key(app, confirm, key.code);
     }
+    if let Some(effects) = crate::tui::crud::open_json_editor(app, &key) {
+        return effects;
+    }
     if app.modal.is_some() {
         return on_modal_key(app, key);
     }
