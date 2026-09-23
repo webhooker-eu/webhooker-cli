@@ -17,7 +17,7 @@ use crate::tui::events_state::{
     StatsRange, TimeWindow,
 };
 use crate::tui::model::{Me, TailNotice};
-use crate::tui::relay_session::RelayUpdate;
+use crate::tui::relay_session::{LocalReplay, RelayStart, RelayUpdate};
 
 /// Generation of fetches that belong to no screen (workspace, plans); their
 /// results are never dropped. Screen generations start at 1.
@@ -276,6 +276,13 @@ pub enum Effect {
         subscription: u64,
     },
     UnsubscribeTail,
+    /// Replaces any running relay; the stream open spends one user request.
+    StartRelay(RelayStart),
+    StopRelay,
+    RetargetRelay(String),
+    ReplayLocally(LocalReplay),
+    /// Writes `[ui.state] last_relay_url`; only into an existing config file.
+    RememberRelayUrl(String),
 }
 
 #[cfg(test)]

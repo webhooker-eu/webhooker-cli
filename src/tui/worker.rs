@@ -14,6 +14,7 @@ use crate::tui::action::{Action, Effect, FetchError, LoginSuccess, Mutation, Req
 use crate::tui::app::{DEFAULT_RETRY_AFTER, KEY_REJECTED_MESSAGE};
 use crate::tui::budget::{Budget, Decision, Priority};
 use crate::tui::model::Me;
+use crate::tui::relay_session::{self, RelayHandle, RelayUpdate};
 
 struct Shared {
     client: RwLock<Option<Arc<ApiClient>>>,
@@ -21,6 +22,7 @@ struct Shared {
     config_path: PathBuf,
     actions: mpsc::UnboundedSender<Action>,
     tail: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    relay: Mutex<Option<RelayHandle>>,
 }
 
 #[derive(Clone)]
@@ -42,6 +44,7 @@ impl Worker {
                 config_path,
                 actions,
                 tail: Mutex::new(None),
+                relay: Mutex::new(None),
             }),
         }
     }
@@ -61,6 +64,32 @@ impl Worker {
             .lock()
             .unwrap()
             .acquire(priority, Instant::now())
+    }
+
+    /// Stops the relay synchronously; `tui::run` calls it before restoring
+    /// the terminal so no session outlives the TUI.
+    pub fn stop_relay(&self) {
+        if let Some(handle) = self.shared.relay.lock().unwrap().take() {
+            handle.stop();
+        }
+    }
+
+    pub fn relay_running(&self) -> bool {
+        self.shared
+            .relay
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|handle| !handle.is_finished())
+    }
+
+    pub fn relay_target(&self) -> Option<String> {
+        self.shared
+            .relay
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(RelayHandle::target)
     }
 
     pub fn run(&self, effect: Effect) {
@@ -100,6 +129,49 @@ impl Worker {
             Effect::UnsubscribeTail => {
                 if let Some(previous) = shared.tail.lock().unwrap().take() {
                     previous.abort();
+                }
+            }
+            Effect::StartRelay(start) => {
+                let Some(client) = self.client() else {
+                    let _ = shared.actions.send(Action::Relay {
+                        session: start.session,
+                        update: RelayUpdate::Ended(Some("not logged in".to_string())),
+                    });
+                    return;
+                };
+                // Opening the stream is one request against the rate limit.
+                let _ = shared
+                    .budget
+                    .lock()
+                    .unwrap()
+                    .acquire(Priority::User, Instant::now());
+                let handle = RelayHandle::spawn(client, &start, shared.actions.clone());
+                let previous = shared.relay.lock().unwrap().replace(handle);
+                if let Some(previous) = previous {
+                    previous.stop();
+                }
+            }
+            Effect::StopRelay => self.stop_relay(),
+            Effect::RetargetRelay(url) => {
+                if let Some(handle) = shared.relay.lock().unwrap().as_ref() {
+                    handle.retarget(url);
+                }
+            }
+            Effect::ReplayLocally(replay) => {
+                tokio::spawn(async move {
+                    let session = replay.session;
+                    let record = relay_session::replay_locally(replay).await;
+                    let _ = shared.actions.send(Action::Relay {
+                        session,
+                        update: RelayUpdate::Replayed(record),
+                    });
+                });
+            }
+            Effect::RememberRelayUrl(url) => {
+                if shared.config_path.exists() {
+                    let _ = config::update(&shared.config_path, |config| {
+                        config.ui.state.last_relay_url = Some(url)
+                    });
                 }
             }
         }
@@ -554,5 +626,172 @@ mod tests {
         assert_eq!(subscription, 4);
         assert_eq!(notice.public_id, "evt_1");
         worker.run(Effect::UnsubscribeTail);
+    }
+
+    use crate::tui::relay_session::{LocalReplay, RelayStart};
+
+    async fn relay_stream(server: &MockServer) {
+        let frame = serde_json::json!({
+            "id": "0198c9f0-0000-7000-8000-0000000000ff",
+            "public_id": "evt_one",
+            "source_id": "src",
+            "method": "POST",
+            "headers": {},
+            "body": "{}",
+            "content_type": "application/json",
+            "verification_status": "verified",
+            "received_at": "2026-09-23T12:04:11Z"
+        });
+        Mock::given(method("GET"))
+            .and(path("/api/v1/sources/src/stream"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(format!("event: webhook\ndata: {frame}\n\n")),
+            )
+            .mount(server)
+            .await;
+    }
+
+    fn relay_start(session: u64, target_url: String) -> RelayStart {
+        RelayStart {
+            session,
+            source_id: "src".into(),
+            source_name: "stripe-prod".into(),
+            target_url,
+            extra_headers: vec![],
+        }
+    }
+
+    async fn next_relay_update(
+        receiver: &mut mpsc::UnboundedReceiver<Action>,
+    ) -> (u64, RelayUpdate) {
+        loop {
+            if let Action::Relay { session, update } = next(receiver).await {
+                return (session, update);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn starting_a_relay_spends_one_user_request_and_streams() {
+        let server = MockServer::start().await;
+        relay_stream(&server).await;
+        let local = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&local)
+            .await;
+        let directory = tempfile::tempdir().unwrap();
+        let (worker, mut receiver) = worker_for(&server, 1, directory.path().join("c.toml"));
+
+        worker.run(Effect::StartRelay(relay_start(3, local.uri())));
+        assert!(worker.relay_running());
+        assert_eq!(worker.acquire(Priority::Background), Decision::Skip);
+        loop {
+            let (session, update) = next_relay_update(&mut receiver).await;
+            assert_eq!(session, 3);
+            if matches!(update, RelayUpdate::Event(_)) {
+                break;
+            }
+        }
+        worker.run(Effect::StopRelay);
+        assert!(!worker.relay_running());
+    }
+
+    #[tokio::test]
+    async fn retarget_reaches_the_running_session() {
+        let server = MockServer::start().await;
+        relay_stream(&server).await;
+        let directory = tempfile::tempdir().unwrap();
+        let (worker, _receiver) = worker_for(&server, 30, directory.path().join("c.toml"));
+        worker.run(Effect::StartRelay(relay_start(
+            1,
+            "http://localhost:3000".into(),
+        )));
+        worker.run(Effect::RetargetRelay("http://localhost:4000".into()));
+        assert_eq!(
+            worker.relay_target().as_deref(),
+            Some("http://localhost:4000")
+        );
+        worker.run(Effect::StartRelay(relay_start(
+            2,
+            "http://localhost:5000".into(),
+        )));
+        assert_eq!(
+            worker.relay_target().as_deref(),
+            Some("http://localhost:5000"),
+            "a new start replaces the running session"
+        );
+        worker.stop_relay();
+        assert!(!worker.relay_running());
+    }
+
+    #[tokio::test]
+    async fn a_relay_without_a_client_ends_at_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        let worker = Worker::new(None, 30, directory.path().join("c.toml"), sender);
+        worker.run(Effect::StartRelay(relay_start(
+            4,
+            "http://localhost:3000".into(),
+        )));
+        assert_eq!(
+            next(&mut receiver).await,
+            Action::Relay {
+                session: 4,
+                update: RelayUpdate::Ended(Some("not logged in".into())),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn local_replay_reports_a_replayed_record() {
+        let local = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(202))
+            .mount(&local)
+            .await;
+        let directory = tempfile::tempdir().unwrap();
+        let (worker, mut receiver) = worker_for(&local, 30, directory.path().join("c.toml"));
+        worker.run(Effect::ReplayLocally(LocalReplay {
+            session: 5,
+            frame: Arc::new(crate::tui::fixtures::relay_frame(
+                "evt_one",
+                "2026-09-23T12:04:11Z",
+            )),
+            target_url: local.uri(),
+            extra_headers: vec![],
+        }));
+        let (session, update) = next_relay_update(&mut receiver).await;
+        assert_eq!(session, 5);
+        let RelayUpdate::Replayed(record) = update else {
+            panic!("expected a replayed record");
+        };
+        assert!(matches!(
+            record.outcome,
+            crate::relay::RelayOutcome::Forwarded(ref response) if response.status == 202
+        ));
+    }
+
+    #[tokio::test]
+    async fn the_last_relay_url_is_remembered_only_in_an_existing_config() {
+        let server = MockServer::start().await;
+        let directory = tempfile::tempdir().unwrap();
+        let missing = directory.path().join("missing.toml");
+        let (worker, _receiver) = worker_for(&server, 30, missing.clone());
+        worker.run(Effect::RememberRelayUrl("http://localhost:4000".into()));
+        assert!(!missing.exists());
+
+        let existing = directory.path().join("config.toml");
+        crate::config::save(&existing, &crate::config::Config::new("s", "whk_saved")).unwrap();
+        let (worker, _receiver) = worker_for(&server, 30, existing.clone());
+        worker.run(Effect::RememberRelayUrl("http://localhost:4000".into()));
+        let saved = crate::config::load(&existing).unwrap().unwrap();
+        assert_eq!(
+            saved.ui.state.last_relay_url.as_deref(),
+            Some("http://localhost:4000")
+        );
+        assert_eq!(saved.api_key, "whk_saved");
     }
 }
