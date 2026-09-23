@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 use ratatui::crossterm::event::KeyEvent;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::args::query_string;
 use crate::client::ApiError;
@@ -130,6 +130,74 @@ impl FetchError {
     }
 }
 
+/// A write the worker sends once, with the user's budget, never retried.
+/// Plan 5 adds the CRUD variants.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Mutation {
+    ReplayEvent {
+        event_id: String,
+        connection_ids: Vec<String>,
+    },
+    ResendBulk {
+        connection_id: String,
+        statuses: Vec<String>,
+        since: Option<String>,
+        until: Option<String>,
+    },
+}
+
+impl Mutation {
+    pub fn method(&self) -> reqwest::Method {
+        match self {
+            Mutation::ReplayEvent { .. } | Mutation::ResendBulk { .. } => reqwest::Method::POST,
+        }
+    }
+
+    pub fn path(&self) -> String {
+        match self {
+            Mutation::ReplayEvent { event_id, .. } => format!("/api/v1/events/{event_id}/resend"),
+            Mutation::ResendBulk { .. } => "/api/v1/deliveries/resend-bulk".to_string(),
+        }
+    }
+
+    /// `None` for DELETE.
+    pub fn body(&self) -> Option<Value> {
+        match self {
+            Mutation::ReplayEvent { connection_ids, .. } => {
+                Some(json!({"connection_ids": connection_ids}))
+            }
+            Mutation::ResendBulk {
+                connection_id,
+                statuses,
+                since,
+                until,
+            } => {
+                let mut body = json!({"connection_id": connection_id});
+                if !statuses.is_empty() {
+                    body["statuses"] = json!(statuses);
+                }
+                if let Some(since) = since {
+                    body["since"] = json!(since);
+                }
+                if let Some(until) = until {
+                    body["until"] = json!(until);
+                }
+                Some(body)
+            }
+        }
+    }
+
+    /// Requests to refetch after it finishes, success or failure.
+    pub fn affected(&self) -> Vec<Request> {
+        match self {
+            Mutation::ReplayEvent { event_id, .. } => vec![Request::Event {
+                id: event_id.clone(),
+            }],
+            Mutation::ResendBulk { .. } => Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoginSuccess {
     pub server: String,
@@ -161,6 +229,11 @@ pub enum Action {
     SettingsSaved(Result<(), String>),
     /// SIGTERM, SIGHUP or the console window closing.
     Terminate,
+    /// DELETE success carries `Value::Null`.
+    Mutated {
+        mutation: Mutation,
+        result: Result<Value, FetchError>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -179,6 +252,9 @@ pub enum Effect {
     },
     /// The whole `[ui]` section; the worker keeps `[ui.state]` from disk.
     SaveSettings(Box<UiSection>),
+    Mutate {
+        mutation: Mutation,
+    },
 }
 
 #[cfg(test)]
@@ -259,5 +335,37 @@ mod tests {
             range: crate::tui::events_state::StatsRange::Day
         }
         .is_metered());
+    }
+
+    #[test]
+    fn mutations_know_their_request() {
+        let replay = Mutation::ReplayEvent {
+            event_id: "e1".into(),
+            connection_ids: vec!["c1".into(), "c2".into()],
+        };
+        assert_eq!(replay.method(), reqwest::Method::POST);
+        assert_eq!(replay.path(), "/api/v1/events/e1/resend");
+        assert_eq!(
+            replay.body(),
+            Some(serde_json::json!({"connection_ids": ["c1", "c2"]}))
+        );
+        assert_eq!(replay.affected(), vec![Request::Event { id: "e1".into() }]);
+
+        let bulk = Mutation::ResendBulk {
+            connection_id: "c1".into(),
+            statuses: vec!["exhausted".into()],
+            since: Some("2026-09-20T00:00:00Z".into()),
+            until: None,
+        };
+        assert_eq!(bulk.path(), "/api/v1/deliveries/resend-bulk");
+        assert_eq!(
+            bulk.body(),
+            Some(serde_json::json!({
+                "connection_id": "c1",
+                "statuses": ["exhausted"],
+                "since": "2026-09-20T00:00:00Z"
+            }))
+        );
+        assert!(bulk.affected().is_empty());
     }
 }

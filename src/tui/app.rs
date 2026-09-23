@@ -9,7 +9,9 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::client::ApiError;
-use crate::tui::action::{Action, Effect, FetchError, LoginSuccess, Request, GLOBAL_GENERATION};
+use crate::tui::action::{
+    Action, Effect, FetchError, LoginSuccess, Mutation, Request, GLOBAL_GENERATION,
+};
 use crate::tui::budget::{self, Priority, FREE_API_PER_MINUTE};
 use crate::tui::events_state::EventScreens;
 use crate::tui::forms::input::TextInput;
@@ -770,6 +772,7 @@ pub fn update(app: &mut App, action: Action) -> Vec<Effect> {
         }
         Action::LoginFinished(result) => on_login_finished(app, result),
         Action::SettingsSaved(result) => on_settings_saved(app, result),
+        Action::Mutated { mutation, result } => on_mutated(app, mutation, result),
         Action::Terminate => {
             app.quit = true;
             Vec::new()
@@ -867,6 +870,50 @@ fn on_settings_saved(app: &mut App, result: Result<(), String>) -> Vec<Effect> {
             app.pending_settings = None;
             if let Some(form) = app.settings_form.as_mut() {
                 form.error = Some(message);
+            }
+            Vec::new()
+        }
+    }
+}
+
+/// A finished write: toast the outcome, then refetch what it touched.
+fn on_mutated(app: &mut App, mutation: Mutation, result: Result<Value, FetchError>) -> Vec<Effect> {
+    let mut effects = match result {
+        Ok(value) => mutation_succeeded(app, &mutation, &value),
+        Err(error) => {
+            if let FetchError::Api(api) = &error {
+                match api.status {
+                    401 => return app.key_rejected(),
+                    429 => {
+                        app.rate_limited_until =
+                            Some(app.now + api.retry_after.unwrap_or(DEFAULT_RETRY_AFTER));
+                    }
+                    _ => {}
+                }
+            }
+            app.toast(error.message(), Tone::Danger);
+            Vec::new()
+        }
+    };
+    let generation = app.generation;
+    for request in mutation.affected() {
+        effects.push(app.fetch(request, generation, Priority::User));
+    }
+    effects
+}
+
+fn mutation_succeeded(app: &mut App, mutation: &Mutation, value: &Value) -> Vec<Effect> {
+    match mutation {
+        Mutation::ReplayEvent { .. } | Mutation::ResendBulk { .. } => {
+            let created = value.get("created").and_then(Value::as_i64).unwrap_or(0);
+            let noun = if created == 1 {
+                "delivery"
+            } else {
+                "deliveries"
+            };
+            app.toast(format!("{created} {noun} queued"), Tone::Success);
+            if matches!(mutation, Mutation::ResendBulk { .. }) {
+                return app.refresh_now();
             }
             Vec::new()
         }
@@ -1337,5 +1384,101 @@ mod tests {
             tab: SourceTab::Dlq,
         };
         assert_eq!(app.primary_status(), Some((None, false)));
+    }
+
+    use crate::tui::action::Mutation;
+
+    fn replay() -> Mutation {
+        Mutation::ReplayEvent {
+            event_id: fixtures::EVENT_ID.into(),
+            connection_ids: vec![fixtures::STRIPE_BILLING_ID.into()],
+        }
+    }
+
+    #[test]
+    fn a_successful_replay_toasts_the_count_and_refetches_the_event() {
+        let mut app = fixtures::app();
+        let effects = update(
+            &mut app,
+            Action::Mutated {
+                mutation: replay(),
+                result: Ok(json!({"created": 2})),
+            },
+        );
+        let toast = app.toasts.last().unwrap();
+        assert_eq!(toast.text, "2 deliveries queued");
+        assert_eq!(toast.tone, Tone::Success);
+        assert!(effects.contains(&Effect::Fetch {
+            request: Request::Event {
+                id: fixtures::EVENT_ID.into()
+            },
+            generation: app.generation,
+            priority: Priority::User,
+        }));
+    }
+
+    #[test]
+    fn a_failed_mutation_closes_forms_and_shows_the_server_message() {
+        let mut app = fixtures::app();
+        let effects = update(
+            &mut app,
+            Action::Mutated {
+                mutation: replay(),
+                result: Err(FetchError::Api(ApiError::synthetic(
+                    403,
+                    Some("forbidden"),
+                    "not allowed",
+                ))),
+            },
+        );
+        let toast = app.toasts.last().unwrap();
+        assert_eq!(toast.text, "not allowed");
+        assert_eq!(toast.tone, Tone::Danger);
+        assert_eq!(
+            fetched_requests(&effects).len(),
+            1,
+            "the event is refetched"
+        );
+    }
+
+    #[test]
+    fn a_rate_limited_mutation_pauses_polling() {
+        let mut app = fixtures::app();
+        update(
+            &mut app,
+            Action::Mutated {
+                mutation: replay(),
+                result: Err(FetchError::Api(
+                    ApiError::synthetic(429, Some("rate_limited"), "slow down")
+                        .with_retry_after(Duration::from_secs(9)),
+                )),
+            },
+        );
+        assert_eq!(
+            app.rate_limited_until,
+            Some(app.now + Duration::from_secs(9))
+        );
+    }
+
+    #[test]
+    fn a_bulk_resend_refreshes_the_visible_screen() {
+        let mut app = fixtures::app();
+        app.switch_to(Section::Dlq);
+        let effects = update(
+            &mut app,
+            Action::Mutated {
+                mutation: Mutation::ResendBulk {
+                    connection_id: fixtures::STRIPE_BILLING_ID.into(),
+                    statuses: vec!["exhausted".into()],
+                    since: None,
+                    until: None,
+                },
+                result: Ok(json!({"created": 1})),
+            },
+        );
+        assert_eq!(app.toasts.last().unwrap().text, "1 delivery queued");
+        assert!(fetched_requests(&effects).contains(&Request::DlqSummary {
+            source_id: fixtures::STRIPE_ID.into()
+        }));
     }
 }

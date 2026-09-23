@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 
 use crate::client::ApiClient;
 use crate::config::{self, UiSection};
-use crate::tui::action::{Action, Effect, FetchError, LoginSuccess, Request};
+use crate::tui::action::{Action, Effect, FetchError, LoginSuccess, Mutation, Request};
 use crate::tui::app::{DEFAULT_RETRY_AFTER, KEY_REJECTED_MESSAGE};
 use crate::tui::budget::{Budget, Decision, Priority};
 use crate::tui::model::Me;
@@ -78,6 +78,9 @@ impl Worker {
             Effect::SaveSettings(section) => {
                 tokio::spawn(save_settings(shared, *section));
             }
+            Effect::Mutate { mutation } => {
+                tokio::spawn(mutate(shared, mutation));
+            }
         }
     }
 }
@@ -124,6 +127,46 @@ async fn fetch(shared: Arc<Shared>, request: Request, generation: u64, priority:
     });
 }
 
+async fn mutate(shared: Arc<Shared>, mutation: Mutation) {
+    shared
+        .budget
+        .lock()
+        .unwrap()
+        .acquire(Priority::User, Instant::now());
+    let client = shared.client.read().unwrap().clone();
+    let result = match client {
+        Some(client) => send_mutation(&client, &mutation)
+            .await
+            .map_err(FetchError::from_anyhow),
+        None => Err(FetchError::Network("not logged in".to_string())),
+    };
+    if let Err(FetchError::Api(error)) = &result {
+        if error.status == 429 {
+            let until = Instant::now() + error.retry_after.unwrap_or(DEFAULT_RETRY_AFTER);
+            shared.budget.lock().unwrap().pause_until(until);
+        }
+    }
+    let _ = shared.actions.send(Action::Mutated { mutation, result });
+}
+
+async fn send_mutation(
+    client: &ApiClient,
+    mutation: &Mutation,
+) -> anyhow::Result<serde_json::Value> {
+    let method = mutation.method();
+    let path = mutation.path();
+    let body = mutation.body().unwrap_or_else(|| serde_json::json!({}));
+    if method == reqwest::Method::POST {
+        client.post_json(&path, body).await
+    } else if method == reqwest::Method::PATCH {
+        client.patch_json(&path, body).await
+    } else if method == reqwest::Method::DELETE {
+        client.delete(&path).await.map(|()| serde_json::Value::Null)
+    } else {
+        anyhow::bail!("unsupported method {method}")
+    }
+}
+
 async fn login(shared: Arc<Shared>, server: String, api_key: String) {
     let result = validate_and_save(&shared, server, api_key).await;
     let _ = shared.actions.send(Action::LoginFinished(result));
@@ -168,6 +211,7 @@ async fn save_settings(shared: Arc<Shared>, section: UiSection) {
 mod tests {
     use super::*;
     use crate::config::UiState;
+    use crate::tui::action::Mutation;
     use crate::tui::app::KEY_REJECTED_MESSAGE;
     use std::time::Duration;
     use wiremock::matchers::{header, method, path};
@@ -386,5 +430,66 @@ mod tests {
             saved.ui.state.last_relay_url.as_deref(),
             Some("http://localhost:4000")
         );
+    }
+
+    #[tokio::test]
+    async fn a_mutation_posts_its_body_and_reports_the_answer() {
+        use wiremock::matchers::body_json;
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/events/e1/resend"))
+            .and(body_json(serde_json::json!({"connection_ids": ["c1"]})))
+            .respond_with(
+                ResponseTemplate::new(202).set_body_json(serde_json::json!({"created": 1})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let directory = tempfile::tempdir().unwrap();
+        let (worker, mut receiver) = worker_for(&server, 1, directory.path().join("c.toml"));
+        let mutation = Mutation::ReplayEvent {
+            event_id: "e1".into(),
+            connection_ids: vec!["c1".into()],
+        };
+        worker.run(Effect::Mutate {
+            mutation: mutation.clone(),
+        });
+        assert_eq!(
+            next(&mut receiver).await,
+            Action::Mutated {
+                mutation,
+                result: Ok(serde_json::json!({"created": 1})),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_mutation_is_reported_and_never_retried() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/deliveries/resend-bulk"))
+            .respond_with(ResponseTemplate::new(422).set_body_json(serde_json::json!({
+                "error": {"code": "validation_error", "message": "unknown connection"}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let directory = tempfile::tempdir().unwrap();
+        let (worker, mut receiver) = worker_for(&server, 30, directory.path().join("c.toml"));
+        worker.run(Effect::Mutate {
+            mutation: Mutation::ResendBulk {
+                connection_id: "c9".into(),
+                statuses: vec![],
+                since: None,
+                until: None,
+            },
+        });
+        let Action::Mutated {
+            result: Err(error), ..
+        } = next(&mut receiver).await
+        else {
+            panic!("expected a failure");
+        };
+        assert_eq!(error.message(), "unknown connection");
     }
 }
