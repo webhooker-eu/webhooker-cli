@@ -610,11 +610,11 @@ impl App {
                 }
                 self.event_screens.last_source_id = Some(id);
             }
-            Screen::EventDetail { id } => {
-                if self.event_screens.detail_for.as_deref() != Some(id.as_str()) {
-                    self.event_screens.detail = EventView::default();
-                    self.event_screens.detail_for = Some(id);
-                }
+            Screen::EventDetail { id }
+                if self.event_screens.detail_for.as_deref() != Some(id.as_str()) =>
+            {
+                self.event_screens.detail = EventView::default();
+                self.event_screens.detail_for = Some(id);
             }
             _ => {}
         }

@@ -201,7 +201,7 @@ fn render_volume(frame: &mut Frame, area: Rect, app: &App) {
         return;
     };
     let mut volumes: Vec<_> = page.items.iter().collect();
-    volumes.sort_by(|first, second| second.count.cmp(&first.count));
+    volumes.sort_by_key(|volume| std::cmp::Reverse(volume.count));
     let total: i64 = volumes.iter().map(|volume| volume.count).sum();
     let rows: Vec<Row> = volumes
         .iter()
