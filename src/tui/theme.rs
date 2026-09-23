@@ -22,6 +22,8 @@ pub struct TerminalEnv {
     pub force_ascii: bool,
     pub dumb: bool,
     pub light_background: Option<bool>,
+    /// Terminal.app, the Linux console and dumb terminals ignore OSC 52.
+    pub osc52_unsupported: bool,
 }
 
 impl TerminalEnv {
@@ -36,6 +38,8 @@ impl TerminalEnv {
             force_ascii: lookup("WHK_ASCII").as_deref() == Some("1"),
             dumb: lookup("TERM").as_deref() == Some("dumb"),
             light_background: lookup("COLORFGBG").and_then(|value| background_is_light(&value)),
+            osc52_unsupported: lookup("TERM_PROGRAM").as_deref() == Some("Apple_Terminal")
+                || matches!(lookup("TERM").as_deref(), Some("linux" | "dumb")),
         }
     }
 

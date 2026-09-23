@@ -3,6 +3,7 @@
 pub mod action;
 pub mod app;
 pub mod budget;
+pub mod clipboard;
 pub mod editor;
 pub mod events_state;
 pub mod forms;
