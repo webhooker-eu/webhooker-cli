@@ -550,3 +550,33 @@ fn bulk_resend_form() {
     crate::tui::keys_events::open_bulk_resend(&mut app);
     assert_snapshot!("form_bulk_resend_80x24", draw(&app, 80, 24).backend());
 }
+
+#[test]
+fn stats_screen() {
+    let app = fixtures::stats_app();
+    snapshot_both_sizes("stats", &app);
+    let text = screen_text(&app, 120, 40);
+    for expected in [
+        "Events per hour",
+        "1 204",
+        "Failed attempts 41",
+        "p50 120 ms",
+        "p95 880 ms",
+        "p99 -",
+        "✓ succeeded 1180",
+        "✕ exhausted 3",
+        "github-ci",
+        "75%",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?} in\n{text}");
+    }
+    let stripe = text
+        .lines()
+        .position(|line| line.contains("stripe-prod"))
+        .unwrap();
+    let github = text
+        .lines()
+        .position(|line| line.contains("github-ci"))
+        .unwrap();
+    assert!(stripe < github, "sources are sorted by volume");
+}

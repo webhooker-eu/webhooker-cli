@@ -179,7 +179,8 @@ fn on_main_key(app: &mut App, code: KeyCode) -> Vec<Effect> {
         Screen::Events => keys_events::on_events_list_key(app, code, EventsScope::Global),
         Screen::EventDetail { .. } => keys_events::on_event_detail_key(app, code),
         Screen::Dlq => keys_events::on_dlq_key(app, code),
-        Screen::Stats | Screen::Relay | Screen::Settings => to_sidebar(app, code),
+        Screen::Stats => keys_events::on_stats_key(app, code),
+        Screen::Relay | Screen::Settings => to_sidebar(app, code),
         Screen::Login => Vec::new(),
     }
 }

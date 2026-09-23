@@ -127,7 +127,14 @@ pub fn hints(app: &App) -> Vec<Hint> {
             ("esc", "summary"),
             ("?", "help"),
         ],
-        Screen::Stats | Screen::Relay => {
+        Screen::Stats => vec![
+            ("h/l", "range"),
+            ("1-3", "24h 7d 30d"),
+            ("r", "refresh"),
+            ("?", "help"),
+            ("q", "quit"),
+        ],
+        Screen::Relay => {
             vec![("g", "jump"), ("?", "help"), ("q", "quit")]
         }
     }
@@ -179,6 +186,7 @@ pub fn help(screen: &Screen) -> Vec<(&'static str, Vec<Hint>)> {
             ("F", "source, statuses, time range"),
             ("R", "resend the selected connection"),
         ],
+        Screen::Stats => vec![("h/l, 1-3", "range: 24h, 7d, 30d")],
         _ => Vec::new(),
     };
     if !specific.is_empty() {

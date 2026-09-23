@@ -20,6 +20,7 @@ mod settings;
 mod sidebar;
 mod source_detail;
 mod sources;
+mod stats;
 mod status_line;
 mod too_small;
 
@@ -97,7 +98,8 @@ fn render_screen(frame: &mut Frame, area: Rect, app: &App) {
         Screen::Events => events::render(frame, area, app),
         Screen::EventDetail { .. } => event_detail::render(frame, area, app),
         Screen::Dlq => dlq::render(frame, area, app),
-        Screen::Stats | Screen::Relay => placeholder::render(frame, area, app),
+        Screen::Stats => stats::render(frame, area, app),
+        Screen::Relay => placeholder::render(frame, area, app),
         Screen::Login => {}
     }
 }

@@ -6,7 +6,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use crate::tui::action::Effect;
 use crate::tui::app::{App, Confirm, ConfirmAction, FormPurpose, ModalForm};
 use crate::tui::events_state::{
-    is_rfc3339, DlqPane, EventFilter, EventPane, EventsScope, TimeWindow, DLQ_STATUSES,
+    is_rfc3339, DlqPane, EventFilter, EventPane, EventsScope, StatsRange, TimeWindow, DLQ_STATUSES,
     EVENTS_PAGE_SIZE,
 };
 use crate::tui::forms::form::{CheckItem, Field, Form, SelectOption};
@@ -635,6 +635,23 @@ pub fn submit_bulk_resend(
     Vec::new()
 }
 
+pub fn on_stats_key(app: &mut App, code: KeyCode) -> Vec<Effect> {
+    let current = app.event_screens.stats.range;
+    let target = match code {
+        KeyCode::Char('1') => StatsRange::Day,
+        KeyCode::Char('2') => StatsRange::Week,
+        KeyCode::Char('3') => StatsRange::Month,
+        KeyCode::Right | KeyCode::Char('l') => current.next(),
+        KeyCode::Left | KeyCode::Char('h') => current.previous(),
+        other => return keys::to_sidebar(app, other),
+    };
+    if target == current {
+        return Vec::new();
+    }
+    app.event_screens.stats.range = target;
+    app.enter()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1082,5 +1099,29 @@ mod tests {
         let mut app = fixtures::source_detail(crate::tui::screen::SourceTab::Dlq);
         press(&mut app, KeyCode::Esc);
         assert_eq!(app.screen, Screen::Sources);
+    }
+
+    #[test]
+    fn stats_ranges_switch_with_digits_and_h_l() {
+        let mut app = fixtures::stats_app();
+        let effects = press(&mut app, KeyCode::Char('2'));
+        assert_eq!(app.event_screens.stats.range, StatsRange::Week);
+        assert!(
+            fetched_requests(&effects).contains(&Request::StatsOverview {
+                range: StatsRange::Week
+            })
+        );
+        press(&mut app, KeyCode::Char('l'));
+        assert_eq!(app.event_screens.stats.range, StatsRange::Month);
+        press(&mut app, KeyCode::Char('l'));
+        assert_eq!(app.event_screens.stats.range, StatsRange::Day);
+        press(&mut app, KeyCode::Char('h'));
+        assert_eq!(app.event_screens.stats.range, StatsRange::Month);
+        assert!(
+            press(&mut app, KeyCode::Char('3')).is_empty(),
+            "already 30d"
+        );
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.focus, crate::tui::app::Focus::Sidebar);
     }
 }

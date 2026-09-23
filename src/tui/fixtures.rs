@@ -538,3 +538,58 @@ pub fn dlq_app() -> App {
     );
     app
 }
+
+/// The Stats screen for the last 24 h: 1 204 events over six hours.
+pub fn stats_app() -> App {
+    use crate::tui::model::{Page, SourceVolume};
+    let mut app = app();
+    let loaded = loaded_at(&app);
+    app.screen = Screen::Stats;
+    app.data.stats_overview.finish(
+        serde_json::from_value(json!({
+            "total_events": 1204,
+            "events_per_bucket": [
+                {"bucket": "2026-09-23T06:00:00Z", "count": 120},
+                {"bucket": "2026-09-23T07:00:00Z", "count": 340},
+                {"bucket": "2026-09-23T08:00:00Z", "count": 80},
+                {"bucket": "2026-09-23T09:00:00Z", "count": 400},
+                {"bucket": "2026-09-23T10:00:00Z", "count": 200},
+                {"bucket": "2026-09-23T11:00:00Z", "count": 64}
+            ],
+            "bucket_unit": "hour",
+            "range_start": "2026-09-22T12:00:00Z",
+            "range_end": "2026-09-23T12:00:00Z",
+            "deliveries_by_status": [
+                {"status": "succeeded", "count": 1180},
+                {"status": "failed", "count": 12},
+                {"status": "exhausted", "count": 3},
+                {"status": "pending", "count": 9}
+            ],
+            "failed_attempts": 41,
+            "e2e_latency_ms": {"p50_ms": 120.4, "p95_ms": 880.0, "p99_ms": null}
+        }))
+        .unwrap(),
+        loaded,
+    );
+    app.data.source_volume.finish(
+        Page {
+            items: vec![
+                SourceVolume {
+                    source_id: GITHUB_ID.into(),
+                    name: "github-ci".into(),
+                    color: None,
+                    count: 304,
+                },
+                SourceVolume {
+                    source_id: STRIPE_ID.into(),
+                    name: "stripe-prod".into(),
+                    color: Some("#3b82f6".into()),
+                    count: 900,
+                },
+            ],
+            total: None,
+        },
+        loaded,
+    );
+    app
+}
