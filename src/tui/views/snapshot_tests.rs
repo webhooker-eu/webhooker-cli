@@ -580,3 +580,38 @@ fn stats_screen() {
         .unwrap();
     assert!(stripe < github, "sources are sorted by volume");
 }
+
+#[test]
+fn event_screens_are_ascii_clean_in_ascii_mode() {
+    let mut with_form = fixtures::dlq_app();
+    crate::tui::keys_events::open_bulk_resend(&mut with_form);
+    let mut expanded = fixtures::event_detail_app();
+    expanded.event_screens.detail.expanded = Some("0198c9f0-0000-7000-8000-0000000000f2".into());
+    let mut binary = fixtures::event_detail_app();
+    binary.data.event.value.as_mut().unwrap().body_base64 = Some("//4AAQ==".into());
+    let mut events_tab = fixtures::source_detail(SourceTab::Events);
+    let now = events_tab.now;
+    events_tab.data.events.finish(fixtures::events_page(), now);
+    let screens = [
+        fixtures::events_app(),
+        events_tab,
+        fixtures::live_app(),
+        fixtures::event_detail_app(),
+        expanded,
+        binary,
+        fixtures::dlq_app(),
+        with_form,
+        fixtures::stats_app(),
+    ];
+    for app in screens {
+        let screen = app.screen.clone();
+        let app = ascii(app);
+        for (width, height) in [(80, 24), (120, 40)] {
+            let text = screen_text(&app, width, height);
+            assert!(
+                text.is_ascii(),
+                "{screen:?} at {width}x{height} is not ASCII:\n{text}"
+            );
+        }
+    }
+}
