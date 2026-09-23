@@ -1,10 +1,12 @@
 //! Deterministic app states for update, key and render tests.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::{TimeZone, Utc};
 use serde_json::json;
 
+use crate::relay::{ForwardedResponse, RelayOutcome, RelayRecord, WebhookFrame};
 use crate::tui::app::{App, AppInit, Focus, KeySource};
 use crate::tui::model::{Connection, Destination, Source, SourceConnection, Workspace};
 use crate::tui::screen::{Screen, SourceTab};
@@ -592,4 +594,41 @@ pub fn stats_app() -> App {
         loaded,
     );
     app
+}
+
+pub fn relay_frame(public_id: &str, received_at: &str) -> WebhookFrame {
+    serde_json::from_value(json!({
+        "id": "0198c9f0-0000-7000-8000-0000000000ff",
+        "public_id": public_id,
+        "source_id": STRIPE_ID,
+        "method": "POST",
+        "headers": {
+            "content-type": "application/json",
+            "stripe-signature": "t=1,v1=abc",
+            "host": "app.webhooker.eu"
+        },
+        "body": "{\"type\":\"invoice.paid\",\"id\":\"in_1\"}",
+        "content_type": "application/json",
+        "verification_status": "verified",
+        "received_at": received_at
+    }))
+    .unwrap()
+}
+
+pub fn forwarded(status: u16, latency_ms: u64, body: &str) -> RelayOutcome {
+    RelayOutcome::Forwarded(ForwardedResponse {
+        status,
+        headers: vec![("content-type".into(), "application/json".into())],
+        body: body.as_bytes().to_vec(),
+        body_truncated: false,
+        elapsed: Duration::from_millis(latency_ms),
+    })
+}
+
+pub fn relay_record(public_id: &str, received_at: &str, outcome: RelayOutcome) -> RelayRecord {
+    RelayRecord {
+        frame: Arc::new(relay_frame(public_id, received_at)),
+        target_url: "http://localhost:3000".into(),
+        outcome,
+    }
 }

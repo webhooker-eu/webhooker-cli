@@ -11,6 +11,7 @@ pub mod keys_events;
 pub mod model;
 pub mod names;
 pub mod poller;
+pub mod relay_session;
 pub mod screen;
 pub mod settings;
 pub mod status;
