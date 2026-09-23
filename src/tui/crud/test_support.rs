@@ -1,5 +1,4 @@
 //! Test helpers that set field values the way a user would.
-#![allow(dead_code)]
 
 use serde_json::Value;
 
