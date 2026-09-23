@@ -6,6 +6,7 @@ mod connection_detail;
 mod connections;
 mod destination_detail;
 mod destinations;
+mod form;
 mod header;
 mod help;
 mod login;
@@ -51,6 +52,9 @@ pub fn render(frame: &mut Frame, app: &App) {
     status_line::render(frame, status_area, app);
     if app.help_open {
         help::render(frame, area, app);
+    }
+    if let Some(modal) = &app.modal {
+        form::render(frame, area, app, &modal.form);
     }
     if let Some(confirm) = &app.confirm {
         confirm::render(frame, area, app, confirm);

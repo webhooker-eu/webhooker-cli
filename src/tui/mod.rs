@@ -7,6 +7,7 @@ pub mod events_state;
 pub mod forms;
 pub mod hints;
 pub mod keys;
+pub mod keys_events;
 pub mod model;
 pub mod names;
 pub mod poller;

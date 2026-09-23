@@ -364,3 +364,21 @@ fn every_screen_is_ascii_clean_in_ascii_mode() {
         assert!(text.is_ascii(), "{screen:?} is not ASCII:\n{text}");
     }
 }
+
+#[test]
+fn a_modal_form_draws_over_the_screen() {
+    let mut app = on_stats();
+    crate::tui::keys_events::open_event_filters(
+        &mut app,
+        crate::tui::events_state::EventsScope::Global,
+    );
+    let text = screen_text(&app, 80, 24);
+    for expected in [
+        "Event filters",
+        "Source",
+        "Time range",
+        "tab next field · ctrl+s save · esc cancel",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?} in\n{text}");
+    }
+}

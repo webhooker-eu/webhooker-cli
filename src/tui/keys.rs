@@ -4,9 +4,10 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::tui::action::Effect;
-use crate::tui::app::{App, Confirm, ConfirmAction, Focus};
+use crate::tui::app::{App, Confirm, ConfirmAction, Focus, FormPurpose};
 use crate::tui::forms::input::TextInput;
 use crate::tui::forms::settings_form::{FormOutcome, SettingsForm};
+use crate::tui::keys_events;
 use crate::tui::screen::{Screen, Section, SourceTab};
 use crate::tui::settings::is_http_url;
 
@@ -24,6 +25,9 @@ pub fn handle(app: &mut App, key: KeyEvent) -> Vec<Effect> {
     }
     if let Some(confirm) = app.confirm.take() {
         return on_confirm_key(app, confirm, key.code);
+    }
+    if app.modal.is_some() {
+        return on_modal_key(app, key);
     }
     if app.help_open {
         if matches!(
@@ -77,7 +81,7 @@ pub fn handle(app: &mut App, key: KeyEvent) -> Vec<Effect> {
 }
 
 /// The new cursor for a navigation key, or `None` for any other key.
-fn moved(cursor: usize, length: usize, code: KeyCode) -> Option<usize> {
+pub(crate) fn moved(cursor: usize, length: usize, code: KeyCode) -> Option<usize> {
     let last = length.saturating_sub(1);
     match code {
         KeyCode::Up | KeyCode::Char('k') => Some(cursor.saturating_sub(1)),
@@ -90,7 +94,7 @@ fn moved(cursor: usize, length: usize, code: KeyCode) -> Option<usize> {
     }
 }
 
-fn to_sidebar(app: &mut App, code: KeyCode) -> Vec<Effect> {
+pub(crate) fn to_sidebar(app: &mut App, code: KeyCode) -> Vec<Effect> {
     if matches!(
         code,
         KeyCode::Esc | KeyCode::Left | KeyCode::Char('h') | KeyCode::Tab | KeyCode::BackTab
@@ -378,6 +382,42 @@ fn on_settings_key(app: &mut App, key: KeyEvent) -> Option<Vec<Effect>> {
     }
 }
 
+fn on_modal_key(app: &mut App, key: KeyEvent) -> Vec<Effect> {
+    let Some(modal) = app.modal.as_mut() else {
+        return Vec::new();
+    };
+    if modal.form.submitting {
+        return Vec::new();
+    }
+    match modal.form.handle(key) {
+        FormOutcome::Save => submit_modal(app),
+        FormOutcome::Cancel => {
+            if modal.form.is_dirty() {
+                app.confirm = Some(Confirm::plain(
+                    "Discard changes?",
+                    ConfirmAction::DiscardForm,
+                ));
+            } else {
+                app.modal = None;
+            }
+            Vec::new()
+        }
+        FormOutcome::Consumed | FormOutcome::Ignored => Vec::new(),
+    }
+}
+
+/// Ctrl+S in a modal form: validate, then act or ask for confirmation.
+pub fn submit_modal(app: &mut App) -> Vec<Effect> {
+    let Some(modal) = app.modal.as_mut() else {
+        return Vec::new();
+    };
+    modal.form.clear_errors();
+    let purpose = modal.purpose.clone();
+    match purpose {
+        FormPurpose::EventFilters => keys_events::submit_event_filters(app),
+    }
+}
+
 fn on_confirm_key(app: &mut App, confirm: Confirm, code: KeyCode) -> Vec<Effect> {
     match code {
         KeyCode::Char('y') => confirmed(app, confirm.action),
@@ -394,6 +434,10 @@ fn confirmed(app: &mut App, action: ConfirmAction) -> Vec<Effect> {
         ConfirmAction::DiscardSettings => {
             app.settings_form = Some(SettingsForm::new(&app.settings));
             app.focus = Focus::Sidebar;
+            Vec::new()
+        }
+        ConfirmAction::DiscardForm => {
+            app.modal = None;
             Vec::new()
         }
     }

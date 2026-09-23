@@ -14,6 +14,7 @@ use crate::tui::action::{
 };
 use crate::tui::budget::{self, Priority, FREE_API_PER_MINUTE};
 use crate::tui::events_state::EventScreens;
+use crate::tui::forms::form::Form;
 use crate::tui::forms::input::TextInput;
 use crate::tui::forms::settings_form::SettingsForm;
 use crate::tui::model::{
@@ -141,6 +142,7 @@ pub struct Toast {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfirmAction {
     DiscardSettings,
+    DiscardForm,
 }
 
 /// A yes/no question; only `y` confirms. The target is drawn in bold.
@@ -185,6 +187,19 @@ impl Confirm {
             self.after
         )
     }
+}
+
+/// What a modal form is for; `keys::submit_modal` acts on it. Plans 4 and 5
+/// add variants.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FormPurpose {
+    EventFilters,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModalForm {
+    pub form: Form,
+    pub purpose: FormPurpose,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -247,6 +262,8 @@ pub struct App {
     pub pending_jump: bool,
     pub help_open: bool,
     pub confirm: Option<Confirm>,
+    /// A modal form; while set, every key goes to it.
+    pub modal: Option<ModalForm>,
     pub toasts: Vec<Toast>,
     pub rate_limited_until: Option<Instant>,
     pub poller: Poller,
@@ -296,6 +313,7 @@ impl App {
             pending_jump: false,
             help_open: false,
             confirm: None,
+            modal: None,
             toasts: Vec::new(),
             rate_limited_until: None,
             poller: Poller::default(),
@@ -892,6 +910,7 @@ fn on_mutated(app: &mut App, mutation: Mutation, result: Result<Value, FetchErro
     let mut effects = match result {
         Ok(value) => mutation_succeeded(app, &mutation, &value),
         Err(error) => {
+            app.modal = None;
             if let FetchError::Api(api) = &error {
                 match api.status {
                     401 => return app.key_rejected(),
