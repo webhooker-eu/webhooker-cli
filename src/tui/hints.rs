@@ -15,6 +15,9 @@ pub fn hints(app: &App) -> Vec<Hint> {
     if app.help_open {
         return vec![("?", "close help")];
     }
+    if app.copy_value.is_some() {
+        return vec![("esc", "close")];
+    }
     if app.modal.is_some() {
         return vec![("tab", "next field"), ("ctrl+s", "save"), ("esc", "cancel")];
     }

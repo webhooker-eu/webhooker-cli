@@ -752,3 +752,14 @@ fn typed_name_confirm() {
     assert!(text.contains("Type stripe-prod to confirm:"));
     assert!(text.contains("> stripe"));
 }
+
+#[test]
+fn copy_modal() {
+    let mut app = fixtures::source_detail(crate::tui::screen::SourceTab::Overview);
+    app.copy_value = Some(crate::tui::clipboard::CopyValue {
+        label: "ingest URL",
+        text: "https://app.webhooker.eu/in/6b225n04u5kmyg".into(),
+    });
+    assert_snapshot!("copy_modal_80x24", draw(&app, 80, 24).backend());
+    assert!(screen_text(&app, 80, 24).contains("Select the ingest URL with the mouse"));
+}

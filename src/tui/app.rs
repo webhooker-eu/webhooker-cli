@@ -352,6 +352,8 @@ pub struct App {
     pub confirm: Option<Confirm>,
     /// A modal form; while set, every key goes to it.
     pub modal: Option<ModalForm>,
+    /// A value shown for manual copying when OSC 52 is off or unsupported.
+    pub copy_value: Option<crate::tui::clipboard::CopyValue>,
     pub toasts: Vec<Toast>,
     pub rate_limited_until: Option<Instant>,
     pub poller: Poller,
@@ -407,6 +409,7 @@ impl App {
             help_open: false,
             confirm: None,
             modal: None,
+            copy_value: None,
             toasts: Vec::new(),
             rate_limited_until: None,
             poller: Poller::default(),

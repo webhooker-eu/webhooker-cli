@@ -5,6 +5,7 @@ mod common;
 mod confirm;
 mod connection_detail;
 mod connections;
+mod copy_value;
 mod destination_detail;
 mod destinations;
 mod dlq;
@@ -64,6 +65,9 @@ pub fn render(frame: &mut Frame, app: &App) {
     }
     if let Some(confirm) = &app.confirm {
         confirm::render(frame, area, app, confirm);
+    }
+    if let Some(copy) = &app.copy_value {
+        copy_value::render(frame, area, app, copy);
     }
 }
 

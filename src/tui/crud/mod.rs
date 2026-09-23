@@ -15,6 +15,7 @@ use serde_json::Value;
 use crate::tui::action::{Effect, FetchError, Mutation, Request};
 use crate::tui::app::{App, Confirm, ConfirmAction, FormPurpose, ModalForm, TypedName};
 use crate::tui::budget::Priority;
+use crate::tui::clipboard::{self, CopyMethod, CopyValue};
 use crate::tui::editor::EditOutcome;
 use crate::tui::forms::form::{FieldKind, Form};
 use crate::tui::model::{Connection, Destination, Source};
@@ -378,6 +379,7 @@ pub fn handle_key(app: &mut App, code: KeyCode) -> Option<Vec<Effect>> {
         KeyCode::Char('E') => ask_toggle_connection(app),
         KeyCode::Char('T') => ask_rotate(app),
         KeyCode::Char('D') => ask_delete(app),
+        KeyCode::Char('y') => copy(app),
         _ => return None,
     };
     Some(effects)
@@ -757,6 +759,46 @@ fn on_failure(app: &mut App, mutation: &Mutation, error: &FetchError) -> Vec<Eff
     close_modal_for(app, mutation);
     app.toast(error.message(), Tone::Danger);
     app.refresh_now()
+}
+
+fn copy(app: &mut App) -> Vec<Effect> {
+    let value = match target(app) {
+        Some(Target::Source(source)) => CopyValue {
+            label: "ingest URL",
+            text: source.ingest_url,
+        },
+        Some(Target::Destination(destination)) => CopyValue {
+            label: "URL",
+            text: destination.url,
+        },
+        Some(Target::Connection { id, .. }) => CopyValue {
+            label: "ID",
+            text: id,
+        },
+        None => return Vec::new(),
+    };
+    match clipboard::method(app.settings.clipboard, &app.env) {
+        CopyMethod::Osc52 => {
+            app.toast(format!("Copied the {}", value.label), Tone::Success);
+            vec![Effect::CopyToClipboard { text: value.text }]
+        }
+        CopyMethod::Modal => {
+            app.copy_value = Some(value);
+            Vec::new()
+        }
+    }
+}
+
+/// While the copy modal is open: Esc, Enter, q or y close it; other keys wait.
+pub fn on_copy_key(app: &mut App, key: &KeyEvent) -> Option<Vec<Effect>> {
+    app.copy_value.as_ref()?;
+    if matches!(
+        key.code,
+        KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::Char('y')
+    ) {
+        app.copy_value = None;
+    }
+    Some(Vec::new())
 }
 
 #[cfg(test)]
@@ -1358,5 +1400,50 @@ mod tests {
             connection_ids: vec![],
         };
         assert!(on_mutated(&mut app, &replay, &Ok(json!({"created": 1}))).is_none());
+    }
+
+    use crate::tui::clipboard::CopyValue;
+    use crate::tui::settings::ClipboardMode;
+
+    #[test]
+    fn y_copies_the_ingest_url_through_osc_52() {
+        let mut app = fixtures::source_detail(SourceTab::Overview);
+        let effects = press(&mut app, KeyCode::Char('y'));
+        assert_eq!(
+            effects,
+            vec![Effect::CopyToClipboard {
+                text: "https://app.webhooker.eu/in/6b225n04u5kmyg".into()
+            }]
+        );
+        assert_eq!(app.toasts.last().unwrap().text, "Copied the ingest URL");
+    }
+
+    #[test]
+    fn y_shows_a_modal_when_copy_is_off_and_any_close_key_closes_it() {
+        let mut app = fixtures::destination_detail();
+        app.settings.clipboard = ClipboardMode::Off;
+        assert!(press(&mut app, KeyCode::Char('y')).is_empty());
+        assert_eq!(
+            app.copy_value,
+            Some(CopyValue {
+                label: "URL",
+                text: "https://billing.internal/hooks".into()
+            })
+        );
+        press(&mut app, KeyCode::Char('j'));
+        assert!(app.copy_value.is_some(), "other keys are ignored");
+        press(&mut app, KeyCode::Esc);
+        assert!(app.copy_value.is_none());
+    }
+
+    #[test]
+    fn y_copies_ids_on_connections() {
+        let mut app = fixtures::connection_detail();
+        assert_eq!(
+            press(&mut app, KeyCode::Char('y')),
+            vec![Effect::CopyToClipboard {
+                text: fixtures::STRIPE_BILLING_ID.into()
+            }]
+        );
     }
 }

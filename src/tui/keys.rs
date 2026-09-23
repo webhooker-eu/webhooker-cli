@@ -37,6 +37,9 @@ pub fn handle(app: &mut App, key: KeyEvent) -> Vec<Effect> {
     if let Some(effects) = crate::tui::crud::open_json_editor(app, &key) {
         return effects;
     }
+    if let Some(effects) = crate::tui::crud::on_copy_key(app, &key) {
+        return effects;
+    }
     if app.modal.is_some() {
         return on_modal_key(app, key);
     }
