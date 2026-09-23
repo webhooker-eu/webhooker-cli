@@ -15,4 +15,5 @@ pub mod theme;
 pub(crate) mod fixtures;
 pub mod hints;
 pub mod keys;
+pub mod views;
 pub mod worker;
