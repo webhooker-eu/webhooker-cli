@@ -20,6 +20,7 @@ struct Shared {
     budget: Mutex<Budget>,
     config_path: PathBuf,
     actions: mpsc::UnboundedSender<Action>,
+    tail: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 #[derive(Clone)]
@@ -40,6 +41,7 @@ impl Worker {
                 budget: Mutex::new(Budget::new(budget_limit)),
                 config_path,
                 actions,
+                tail: Mutex::new(None),
             }),
         }
     }
@@ -80,6 +82,25 @@ impl Worker {
             }
             Effect::Mutate { mutation } => {
                 tokio::spawn(mutate(shared, mutation));
+            }
+            Effect::SubscribeTail {
+                source_id,
+                subscription,
+            } => {
+                let worker = self.clone();
+                let handle = tokio::spawn(crate::tui::streams::run_tail(
+                    worker,
+                    source_id,
+                    subscription,
+                ));
+                if let Some(previous) = shared.tail.lock().unwrap().replace(handle) {
+                    previous.abort();
+                }
+            }
+            Effect::UnsubscribeTail => {
+                if let Some(previous) = shared.tail.lock().unwrap().take() {
+                    previous.abort();
+                }
             }
         }
     }
@@ -491,5 +512,47 @@ mod tests {
             panic!("expected a failure");
         };
         assert_eq!(error.message(), "unknown connection");
+    }
+
+    #[tokio::test]
+    async fn a_tail_subscription_streams_notices_and_status() {
+        let server = MockServer::start().await;
+        let notice = serde_json::json!({
+            "event_id": "e1", "public_id": "evt_1", "source_id": "s1", "method": "POST",
+            "received_at": "2026-09-23T12:05:00Z", "content_type": null, "body_size": 2,
+            "verification_status": "verified"
+        });
+        Mock::given(method("GET"))
+            .and(path("/api/v1/sources/s1/tail"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(format!("event: event\ndata: {notice}\n\n")),
+            )
+            .mount(&server)
+            .await;
+        let directory = tempfile::tempdir().unwrap();
+        let (worker, mut receiver) = worker_for(&server, 30, directory.path().join("c.toml"));
+        worker.run(Effect::SubscribeTail {
+            source_id: "s1".into(),
+            subscription: 4,
+        });
+        assert_eq!(
+            next(&mut receiver).await,
+            Action::TailStatus {
+                subscription: 4,
+                status: crate::sse::StreamStatus::Connected
+            }
+        );
+        let Action::TailNotice {
+            subscription,
+            notice,
+        } = next(&mut receiver).await
+        else {
+            panic!("expected a notice");
+        };
+        assert_eq!(subscription, 4);
+        assert_eq!(notice.public_id, "evt_1");
+        worker.run(Effect::UnsubscribeTail);
     }
 }

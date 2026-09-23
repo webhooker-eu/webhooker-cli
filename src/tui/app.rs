@@ -464,10 +464,13 @@ impl App {
             self.settings_form = Some(SettingsForm::new(&self.settings));
         }
         let generation = self.generation;
-        self.schedule()
+        let mut effects: Vec<Effect> = self
+            .schedule()
             .into_iter()
             .map(|(request, _)| self.fetch(request, generation, Priority::FirstLoad))
-            .collect()
+            .collect();
+        effects.extend(crate::tui::streams::sync(self));
+        effects
     }
 
     /// `r`: refetch everything the screen shows, as a user action.
@@ -773,6 +776,14 @@ pub fn update(app: &mut App, action: Action) -> Vec<Effect> {
         Action::LoginFinished(result) => on_login_finished(app, result),
         Action::SettingsSaved(result) => on_settings_saved(app, result),
         Action::Mutated { mutation, result } => on_mutated(app, mutation, result),
+        Action::TailNotice {
+            subscription,
+            notice,
+        } => crate::tui::streams::on_notice(app, subscription, notice),
+        Action::TailStatus {
+            subscription,
+            status,
+        } => crate::tui::streams::on_status(app, subscription, status),
         Action::Terminate => {
             app.quit = true;
             Vec::new()

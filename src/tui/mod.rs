@@ -13,6 +13,7 @@ pub mod poller;
 pub mod screen;
 pub mod settings;
 pub mod status;
+pub mod streams;
 pub mod theme;
 pub mod views;
 pub mod worker;

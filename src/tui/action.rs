@@ -10,12 +10,13 @@ use serde_json::{json, Value};
 use crate::args::query_string;
 use crate::client::ApiError;
 use crate::config::UiSection;
+use crate::sse::StreamStatus;
 use crate::tui::budget::Priority;
 use crate::tui::events_state::{
     dlq_entries_path, events_path, source_volume_path, stats_overview_path, EventFilter,
     StatsRange, TimeWindow,
 };
-use crate::tui::model::Me;
+use crate::tui::model::{Me, TailNotice};
 
 /// Generation of fetches that belong to no screen (workspace, plans); their
 /// results are never dropped. Screen generations start at 1.
@@ -234,6 +235,14 @@ pub enum Action {
         mutation: Mutation,
         result: Result<Value, FetchError>,
     },
+    TailNotice {
+        subscription: u64,
+        notice: TailNotice,
+    },
+    TailStatus {
+        subscription: u64,
+        status: StreamStatus,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -255,6 +264,12 @@ pub enum Effect {
     Mutate {
         mutation: Mutation,
     },
+    /// Replaces the running tail, if any.
+    SubscribeTail {
+        source_id: String,
+        subscription: u64,
+    },
+    UnsubscribeTail,
 }
 
 #[cfg(test)]
