@@ -1,6 +1,9 @@
+use std::io::IsTerminal;
+
 use anyhow::Result;
-use clap::{Parser, Subcommand};
-use whk::commands::{connections, destinations, events, sources};
+use clap::{CommandFactory, Parser, Subcommand};
+use whk::commands::{connections, destinations, dlq, events, sources, stats};
+use whk::tui::app::KeySource;
 use whk::{args, client, config, listen, tail};
 
 #[derive(Parser)]
@@ -20,11 +23,13 @@ struct Cli {
     #[arg(long, global = true)]
     json: bool,
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand)]
 enum Command {
+    /// Open the interactive terminal UI (a bare `whk` does the same on a terminal)
+    Ui,
     /// Validate and save an API key
     Login,
     /// Show the authenticated workspace
@@ -81,6 +86,16 @@ enum Command {
     Events {
         #[command(subcommand)]
         command: EventCommand,
+    },
+    /// Inspect and resend dead-lettered deliveries
+    Dlq {
+        #[command(subcommand)]
+        command: DlqCommand,
+    },
+    /// Delivery statistics for the workspace
+    Stats {
+        #[command(subcommand)]
+        command: StatsCommand,
     },
     /// Remove the saved credentials
     Logout,
@@ -300,6 +315,71 @@ enum EventCommand {
     },
 }
 
+#[derive(Subcommand)]
+enum DlqCommand {
+    /// Dead-lettered delivery counts per connection of one source
+    Summary {
+        /// Source name, id or ingest token
+        source: String,
+    },
+    /// List one source's dead-lettered deliveries
+    #[command(alias = "list")]
+    Ls {
+        /// Source name, id or ingest token
+        source: String,
+        /// exhausted, failed or both (comma-separated or repeated); defaults to both
+        #[arg(long = "status", value_delimiter = ',')]
+        statuses: Vec<String>,
+        /// RFC 3339 timestamp, e.g. 2026-09-20T10:00:00Z
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
+        until: Option<String>,
+        /// Match on event public id, destination name/url or last error
+        #[arg(short = 'q', long = "query", alias = "search")]
+        search: Option<String>,
+        #[arg(long)]
+        page: Option<i64>,
+        #[arg(long)]
+        limit: Option<i64>,
+    },
+    /// Re-queue one connection's dead-lettered deliveries
+    Resend {
+        #[arg(long = "connection")]
+        connection_id: String,
+        /// Delivery statuses to resend (comma-separated or repeated); defaults to exhausted
+        #[arg(long = "status", value_delimiter = ',')]
+        statuses: Vec<String>,
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
+        until: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum StatsCommand {
+    /// Event volume, deliveries by status, latency and failed attempts
+    Overview {
+        /// Limit to these sources (name, id or ingest token; repeatable)
+        #[arg(long = "source")]
+        sources: Vec<String>,
+        /// RFC 3339 timestamp; defaults to the first event
+        #[arg(long)]
+        since: Option<String>,
+        /// RFC 3339 timestamp; defaults to now
+        #[arg(long)]
+        until: Option<String>,
+    },
+    /// Event volume per source
+    BySource {
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
+        until: Option<String>,
+    },
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let Cli {
@@ -309,7 +389,12 @@ async fn main() -> Result<()> {
         command,
     } = Cli::parse();
 
+    let Some(command) = command else {
+        return bare_command(server, api_key, json).await;
+    };
+
     match command {
+        Command::Ui => open_tui(server, api_key).await,
         Command::Login => login(server, api_key).await,
         Command::Logout => logout(),
         Command::Whoami => {
@@ -365,6 +450,12 @@ async fn main() -> Result<()> {
         }
         Command::Events { command } => {
             run_event_command(connect(&server, &api_key)?, command, json).await
+        }
+        Command::Dlq { command } => {
+            run_dlq_command(connect(&server, &api_key)?, command, json).await
+        }
+        Command::Stats { command } => {
+            run_stats_command(connect(&server, &api_key)?, command, json).await
         }
     }
 }
@@ -579,6 +670,74 @@ async fn run_event_command(
     }
 }
 
+async fn run_dlq_command(client: client::ApiClient, command: DlqCommand, json: bool) -> Result<()> {
+    match command {
+        DlqCommand::Summary { source } => dlq::summary(&client, &source, json).await,
+        DlqCommand::Ls {
+            source,
+            statuses,
+            since,
+            until,
+            search,
+            page,
+            limit,
+        } => {
+            let filters = dlq::ListFilters {
+                statuses: &statuses,
+                since: since.as_deref(),
+                until: until.as_deref(),
+                search: search.as_deref(),
+                page,
+                limit,
+            };
+            dlq::list(&client, &source, filters, json).await
+        }
+        DlqCommand::Resend {
+            connection_id,
+            statuses,
+            since,
+            until,
+        } => {
+            dlq::resend(
+                &client,
+                &connection_id,
+                &statuses,
+                since.as_deref(),
+                until.as_deref(),
+                json,
+            )
+            .await
+        }
+    }
+}
+
+async fn run_stats_command(
+    client: client::ApiClient,
+    command: StatsCommand,
+    json: bool,
+) -> Result<()> {
+    match command {
+        StatsCommand::Overview {
+            sources,
+            since,
+            until,
+        } => {
+            let window = stats::Window {
+                since: since.as_deref(),
+                until: until.as_deref(),
+            };
+            stats::overview(&client, &sources, window, json).await
+        }
+        StatsCommand::BySource { since, until } => {
+            let window = stats::Window {
+                since: since.as_deref(),
+                until: until.as_deref(),
+            };
+            stats::by_source(&client, window, json).await
+        }
+    }
+}
+
 async fn login(server: Option<String>, api_key: Option<String>) -> Result<()> {
     let path = config::default_path()?;
     // The key must always be supplied afresh, but the saved server is
@@ -593,13 +752,15 @@ async fn login(server: Option<String>, api_key: Option<String>) -> Result<()> {
     };
     let client = client::ApiClient::new(server.clone(), key.clone())?;
     let me = client.me().await?; // validates the key
-    config::save(
-        &path,
-        &config::Config {
-            server: server.clone(),
-            api_key: key,
-        },
-    )?;
+    let saved = config::update(&path, |config| {
+        config.server = server.clone();
+        config.api_key = key.clone();
+    });
+    if saved.is_err() {
+        // An unreadable config is overwritten, as before: it holds nothing
+        // this login could preserve.
+        config::save(&path, &config::Config::new(server.clone(), key))?;
+    }
     println!(
         "Logged in to {server} (workspace \"{}\", {} plan). Saved to {}",
         me.workspace.name,
@@ -619,6 +780,62 @@ fn logout() -> Result<()> {
     Ok(())
 }
 
+/// A bare `whk` opens the TUI on an interactive terminal; everywhere else
+/// (pipes, `--json`, `WHK_NO_TUI`, `ui.open_on_bare_command = false`) it
+/// prints help and exits with 2, as clap does for a missing subcommand.
+async fn bare_command(server: Option<String>, api_key: Option<String>, json: bool) -> Result<()> {
+    let saved_ui = config::default_path()
+        .ok()
+        .and_then(|path| config::load(&path).ok().flatten())
+        .map(|config| config.ui);
+    let context = whk::tui::BareCommandContext {
+        stdin_is_terminal: std::io::stdin().is_terminal(),
+        stdout_is_terminal: std::io::stdout().is_terminal(),
+        json,
+        no_tui_env: std::env::var("WHK_NO_TUI").ok(),
+        open_on_bare_command: saved_ui.and_then(|ui| ui.open_on_bare_command),
+    };
+    if whk::tui::bare_command_opens_tui(&context) {
+        return open_tui(server, api_key).await;
+    }
+    Cli::command()
+        .error(
+            clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand,
+            "a subcommand is required",
+        )
+        .exit()
+}
+
+async fn open_tui(server: Option<String>, api_key: Option<String>) -> Result<()> {
+    if !whk::tui::attached_to_terminal() {
+        anyhow::bail!(
+            "whk ui needs an interactive terminal; in scripts use the subcommands (see `whk --help`)"
+        );
+    }
+    let config_path = config::default_path()?;
+    let saved = config::load(&config_path)?;
+    let key_source = if api_key.is_some() {
+        KeySource::Override
+    } else {
+        KeySource::Config
+    };
+    let server = config::resolve_server(server, saved.as_ref());
+    let api_key = api_key.or_else(|| {
+        saved
+            .as_ref()
+            .map(|config| config.api_key.clone())
+            .filter(|key| !key.is_empty())
+    });
+    whk::tui::run(whk::tui::LaunchOptions {
+        server,
+        api_key,
+        key_source,
+        config_path,
+        ui: saved.map(|config| config.ui).unwrap_or_default(),
+    })
+    .await
+}
+
 fn connect(server: &Option<String>, api_key: &Option<String>) -> Result<client::ApiClient> {
     let credentials = effective_config(server, api_key)?;
     client::ApiClient::new(credentials.server, credentials.api_key)
@@ -634,17 +851,13 @@ fn optional_json(raw: Option<&str>) -> Result<Option<serde_json::Value>> {
 }
 
 fn optional_verification(raw: Option<&str>) -> Result<Option<serde_json::Value>> {
-    raw.map(|raw| {
-        args::parse_verification_arg(raw, || Ok(rpassword::prompt_password("Signing secret: ")?))
-    })
-    .transpose()
+    raw.map(|raw| args::parse_verification_arg(raw, || args::read_secret("Signing secret: ")))
+        .transpose()
 }
 
 fn optional_auth(raw: Option<&str>) -> Result<Option<serde_json::Value>> {
     raw.map(|raw| {
-        destinations::parse_auth_arg(raw, || {
-            Ok(rpassword::prompt_password("Outbound signing secret: ")?)
-        })
+        destinations::parse_auth_arg(raw, || args::read_secret("Outbound signing secret: "))
     })
     .transpose()
 }

@@ -1,0 +1,22 @@
+---
+source: src/tui/views/snapshot_tests.rs
+expression: "draw(&app, 100, 18).backend()"
+---
+" Webhooker v0.1.0 · acme · pro                                                                      "
+"┌──────────────┐┌ Stats ⠋ ─────────────────────────────────────────────────────────────────────────┐"
+"│  Sources     ││range  24h   7d   30d                                                             │"
+"│  Destinations││                                                                                  │"
+"│  Connections ││                                                                                  │"
+"│  Events      ││                                                                                  │"
+"│  DLQ         ││                                                                                  │"
+"│▸ Stats       ││                                                                                  │"
+"│  Relay       ││                                                                                  │"
+"│  Settings    ││                                                                                  │"
+"│              ││                                                                                  │"
+"│              ││                                                                                  │"
+"│              ││                                                                                  │"
+"│              ││                                                                                  │"
+"│              ││                                                                                  │"
+"│              ││                                                                                  │"
+"└──────────────┘└──────────────────────────────────────────────────────────────────────────────────┘"
+" h/l range · 1-3 24h 7d 30d · r refresh · ? help · q quit                                           "

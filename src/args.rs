@@ -1,4 +1,6 @@
-use anyhow::{Context, Result};
+use std::io::IsTerminal;
+
+use anyhow::{bail, Context, Result};
 
 /// Reads a JSON argument supplied inline, as `@path/to/file.json`, or as `-`
 /// (stdin). Files and stdin keep secrets out of the shell history.
@@ -43,18 +45,54 @@ pub fn parse_verification_arg(
     if PRESET_PROVIDERS.contains(&raw) {
         let secret = read_secret()?;
         if secret.trim().is_empty() {
-            anyhow::bail!("the signing secret must not be empty");
+            bail!("the signing secret must not be empty");
         }
         return Ok(serde_json::json!({"provider": raw, "secret": secret}));
     }
     let config = parse_json_arg(raw)?;
     if config.get("provider").is_none() {
-        anyhow::bail!(
+        bail!(
             "verification config needs a \"provider\" field, or pass one of: {}, none",
             PRESET_PROVIDERS.join(", ")
         );
     }
     Ok(config)
+}
+
+/// Reads a secret without ever blocking an agent: a terminal gets a hidden
+/// prompt; otherwise the secret comes from `WHK_SECRET` or one line of stdin.
+pub fn read_secret(prompt: &str) -> Result<String> {
+    let stdin = std::io::stdin();
+    resolve_secret(
+        stdin.is_terminal(),
+        std::env::var("WHK_SECRET").ok(),
+        || rpassword::prompt_password(prompt),
+        || {
+            let mut line = String::new();
+            std::io::BufRead::read_line(&mut stdin.lock(), &mut line)?;
+            Ok(line)
+        },
+    )
+}
+
+fn resolve_secret(
+    stdin_is_terminal: bool,
+    env_secret: Option<String>,
+    prompt: impl FnOnce() -> std::io::Result<String>,
+    read_line: impl FnOnce() -> std::io::Result<String>,
+) -> Result<String> {
+    if stdin_is_terminal {
+        return Ok(prompt()?);
+    }
+    if let Some(secret) = env_secret.filter(|secret| !secret.is_empty()) {
+        return Ok(secret);
+    }
+    let line = read_line().context("failed to read the secret from stdin")?;
+    let secret = line.trim_end_matches(['\r', '\n']).to_string();
+    if secret.is_empty() {
+        bail!("no TTY to prompt for the secret; set WHK_SECRET or pipe it on stdin");
+    }
+    Ok(secret)
 }
 
 /// Builds a query string from the params that were actually supplied, so an
@@ -171,6 +209,49 @@ mod tests {
         assert_eq!(
             query_string(&[("received_after", Some("2026-09-20T10:00:00Z".to_string()))]),
             "?received_after=2026-09-20T10%3A00%3A00Z"
+        );
+    }
+
+    fn no_prompt() -> std::io::Result<String> {
+        unreachable!("the terminal prompt must not be used")
+    }
+
+    fn no_stdin() -> std::io::Result<String> {
+        unreachable!("stdin must not be read")
+    }
+
+    #[test]
+    fn a_terminal_gets_the_hidden_prompt() {
+        let secret = resolve_secret(
+            true,
+            Some("ignored".into()),
+            || Ok("typed".into()),
+            no_stdin,
+        )
+        .unwrap();
+        assert_eq!(secret, "typed");
+    }
+
+    #[test]
+    fn without_a_terminal_the_environment_wins() {
+        let secret = resolve_secret(false, Some("from-env".into()), no_prompt, no_stdin).unwrap();
+        assert_eq!(secret, "from-env");
+    }
+
+    #[test]
+    fn without_a_terminal_one_stdin_line_is_read() {
+        let secret =
+            resolve_secret(false, None, no_prompt, || Ok("piped-secret\r\n".into())).unwrap();
+        assert_eq!(secret, "piped-secret");
+    }
+
+    #[test]
+    fn without_a_terminal_env_or_stdin_it_fails_fast() {
+        let error = resolve_secret(false, Some(String::new()), no_prompt, || Ok(String::new()))
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "no TTY to prompt for the secret; set WHK_SECRET or pipe it on stdin"
         );
     }
 }

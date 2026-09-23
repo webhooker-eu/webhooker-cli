@@ -1,0 +1,28 @@
+---
+source: src/tui/views/snapshot_tests.rs
+expression: "draw(app, width, height).backend()"
+---
+"  ▄▀▀▄ █▄ ▄█   Webhooker CLI v0.1.0                                             "
+"  ▀▄▄▀ █ ▀ █   acme · pro · app.webhooker.eu                                    "
+" Sources Dests Conns Events DLQ Stats Relay Settings                            "
+"┌ stripe-prod ─────────────────────────────────────────────────────────────────┐"
+"│1 Overview   2 Live   3 Events   4 Connections   5 DLQ                        │"
+"│                                                                              │"
+"│▸ ●  billing-worker                billing.internal             closed        │"
+"│  ●  audit-log                     audit.example.com            ⚡ open       │" Hidden by multi-width symbols: [(66, " ")]
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"└──────────────────────────────────────────────────────────────────────────────┘"
+" enter open · n new · E disable · D delete · 1-5 tabs · esc back · ? hel 3s ago "

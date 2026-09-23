@@ -19,23 +19,28 @@ pub async fn run(client: &ApiClient, source_selector: &str, json_output: bool) -
     let source = client.resolve_source(source_selector).await?;
     eprintln!("  Tailing \"{}\"  (Ctrl-C to stop)", source.name);
     let path = format!("/api/v1/sources/{}/tail", source.id);
-    sse::run_stream(client, &path, |event| {
-        if json_output {
-            println!("{}", event.data);
-            return;
-        }
-        match serde_json::from_str::<TailNotice>(&event.data) {
-            Ok(notice) => println!(
-                "  {} {} ← {} ({}, {} B, {})",
-                notice.received_at,
-                notice.method,
-                notice.public_id,
-                notice.content_type.as_deref().unwrap_or("-"),
-                notice.body_size,
-                notice.verification_status
-            ),
-            Err(error) => eprintln!("  malformed notice skipped: {error}"),
-        }
-    })
+    sse::run_stream(
+        client,
+        &path,
+        |event| {
+            if json_output {
+                println!("{}", event.data);
+                return;
+            }
+            match serde_json::from_str::<TailNotice>(&event.data) {
+                Ok(notice) => println!(
+                    "  {} {} ← {} ({}, {} B, {})",
+                    notice.received_at,
+                    notice.method,
+                    notice.public_id,
+                    notice.content_type.as_deref().unwrap_or("-"),
+                    notice.body_size,
+                    notice.verification_status
+                ),
+                Err(error) => eprintln!("  malformed notice skipped: {error}"),
+            }
+        },
+        sse::print_status,
+    )
     .await
 }

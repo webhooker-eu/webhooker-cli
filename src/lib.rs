@@ -4,5 +4,7 @@ pub mod commands;
 pub mod config;
 pub mod listen;
 pub mod output;
+pub mod relay;
 pub mod sse;
 pub mod tail;
+pub mod tui;

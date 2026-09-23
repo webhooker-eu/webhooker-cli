@@ -1,0 +1,28 @@
+---
+source: src/tui/views/snapshot_tests.rs
+expression: "draw(app, width, height).backend()"
+---
+"  ▄▀▀▄ █▄ ▄█   Webhooker CLI v0.1.0                                             "
+"  ▀▄▄▀ █ ▀ █   acme · pro · app.webhooker.eu                                    "
+" Sources Dests Conns Events DLQ Stats Relay Settings                            "
+"┌ Destinations ────────────────────────────────────────────────────────────────┐"
+"│▸ ●  billing-worker                billing.internal             closed        │"
+"│  ●  audit-log                     audit.example.com            ⚡ open       │" Hidden by multi-width symbols: [(66, " ")]
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"└──────────────────────────────────────────────────────────────────────────────┘"
+" enter open · n new · e edit · D delete · r refresh · ? help · q quit    3s ago "
