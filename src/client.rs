@@ -1,4 +1,6 @@
-use anyhow::{bail, Context, Result};
+use std::time::Duration;
+
+use anyhow::{Context, Result};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -164,6 +166,28 @@ impl ApiClient {
     }
 }
 
+/// A non-2xx answer from the API. `Display` keeps the CLI's established
+/// wording; the TUI reads the fields to decide what to do.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ApiError {
+    pub status: u16,
+    /// The envelope's `error.code`; `None` for plain-text or empty bodies.
+    pub code: Option<String>,
+    /// The envelope's `error.message`, or the raw body text when it is not JSON.
+    pub message: String,
+    /// Parsed from the `Retry-After` header (seconds), sent with 429.
+    pub retry_after: Option<Duration>,
+    rendered: String,
+}
+
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.rendered)
+    }
+}
+
+impl std::error::Error for ApiError {}
+
 /// Error body the API returns for every non-2xx response.
 #[derive(Deserialize)]
 struct ApiErrorBody {
@@ -172,27 +196,50 @@ struct ApiErrorBody {
 
 #[derive(Deserialize)]
 struct ApiErrorDetail {
+    #[serde(default)]
+    code: Option<String>,
     message: String,
 }
 
 /// Like [`check_status`], but reads the response body so the server's own
 /// message ("name must not be empty") reaches the user instead of a bare status.
 /// The statuses whose cause the body cannot explain — a rejected key, a spent
-/// rate budget — keep the actionable wording of [`status_error`].
+/// rate budget — keep the actionable wording of [`status_message`].
 pub async fn ensure_ok(response: reqwest::Response) -> Result<reqwest::Response> {
     if response.status().is_success() {
         return Ok(response);
     }
     let status = response.status().as_u16();
     let server = server_origin(&response);
-    if matches!(status, 401 | 429) {
-        return status_error(status, &server);
-    }
+    let retry_after = retry_after_of(&response);
     let body = response.text().await.unwrap_or_default();
-    match serde_json::from_str::<ApiErrorBody>(&body) {
-        Ok(parsed) => bail!("{} (HTTP {status})", parsed.error.message),
-        // No parsable body: fall back to the status-only wording.
-        Err(_) => status_error(status, &server),
+    Err(error_from_body(status, &server, retry_after, &body).into())
+}
+
+fn error_from_body(
+    status: u16,
+    server: &str,
+    retry_after: Option<Duration>,
+    body: &str,
+) -> ApiError {
+    let parsed = serde_json::from_str::<ApiErrorBody>(body).ok();
+    let rendered = match &parsed {
+        Some(parsed) if !matches!(status, 401 | 429) => {
+            format!("{} (HTTP {status})", parsed.error.message)
+        }
+        // No parsable body, or a status whose body cannot explain the cause.
+        _ => status_message(status, server),
+    };
+    let (code, message) = match parsed {
+        Some(parsed) => (parsed.error.code, parsed.error.message),
+        None => (None, body.trim().to_string()),
+    };
+    ApiError {
+        status,
+        code,
+        message,
+        retry_after,
+        rendered,
     }
 }
 
@@ -200,7 +247,17 @@ pub async fn ensure_ok(response: reqwest::Response) -> Result<reqwest::Response>
 pub fn check_status(response: reqwest::Response) -> Result<reqwest::Response> {
     match response.status().as_u16() {
         200..=299 => Ok(response),
-        status => status_error(status, &server_origin(&response)),
+        status => {
+            let rendered = status_message(status, &server_origin(&response));
+            Err(ApiError {
+                status,
+                code: None,
+                message: rendered.clone(),
+                retry_after: retry_after_of(&response),
+                rendered,
+            }
+            .into())
+        }
     }
 }
 
@@ -208,18 +265,30 @@ fn server_origin(response: &reqwest::Response) -> String {
     response.url().origin().ascii_serialization()
 }
 
-fn status_error<T>(status: u16, server: &str) -> Result<T> {
+fn retry_after_of(response: &reqwest::Response) -> Option<Duration> {
+    response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .map(Duration::from_secs)
+}
+
+fn status_message(status: u16, server: &str) -> String {
     match status {
-        401 => bail!("the API key was rejected (revoked, or wrong --server?)"),
-        403 => bail!("forbidden: the plan limit was reached or access is denied"),
+        401 => "the API key was rejected (revoked, or wrong --server?)".to_string(),
+        403 => "forbidden: the plan limit was reached or access is denied".to_string(),
         // The API answers its own 404s with a JSON body, so a bare one means
         // the request never reached it.
-        404 => bail!(
+        404 => format!(
             "{server} returned HTTP 404: it does not look like the Webhooker API; \
              fix it with --server, WEBHOOKER_SERVER or `whk login --server <url>`"
         ),
-        429 => bail!("rate limited: the workspace hit its plan's API budget; retry later"),
-        other => bail!("server returned HTTP {other}"),
+        429 => "rate limited: the workspace hit its plan's API budget; retry later".to_string(),
+        other => format!("server returned HTTP {other}"),
     }
 }
 
@@ -515,5 +584,99 @@ mod tests {
             "billing-worker"
         );
         assert!(client.resolve_destination("nope").await.is_err());
+    }
+
+    fn api_error(error: &anyhow::Error) -> &ApiError {
+        error
+            .downcast_ref::<ApiError>()
+            .expect("the error must be a client::ApiError")
+    }
+
+    #[tokio::test]
+    async fn ensure_ok_parses_the_error_envelope() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/sources/"))
+            .respond_with(ResponseTemplate::new(422).set_body_json(serde_json::json!({
+                "error": {"code": "validation_error", "message": "name must not be empty"}
+            })))
+            .mount(&server)
+            .await;
+
+        let error = client_for(&server)
+            .await
+            .post_json("/api/v1/sources/", serde_json::json!({"name": " "}))
+            .await
+            .unwrap_err();
+        let parsed = api_error(&error);
+        assert_eq!(parsed.status, 422);
+        assert_eq!(parsed.code.as_deref(), Some("validation_error"));
+        assert_eq!(parsed.message, "name must not be empty");
+        assert_eq!(parsed.retry_after, None);
+        assert_eq!(error.to_string(), "name must not be empty (HTTP 422)");
+    }
+
+    #[tokio::test]
+    async fn plain_text_bodies_become_the_message_and_keep_the_old_wording() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/events/"))
+            .respond_with(
+                ResponseTemplate::new(400).set_body_string("Failed to deserialize query string"),
+            )
+            .mount(&server)
+            .await;
+
+        let error = client_for(&server)
+            .await
+            .get_json("/api/v1/events/")
+            .await
+            .unwrap_err();
+        let parsed = api_error(&error);
+        assert_eq!(parsed.status, 400);
+        assert_eq!(parsed.code, None);
+        assert_eq!(parsed.message, "Failed to deserialize query string");
+        assert_eq!(error.to_string(), "server returned HTTP 400");
+    }
+
+    #[tokio::test]
+    async fn rate_limit_carries_retry_after_and_code() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/sources/"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("retry-after", "23")
+                    .set_body_json(serde_json::json!({
+                        "error": {"code": "rate_limited", "message": "rate limit exceeded"}
+                    })),
+            )
+            .mount(&server)
+            .await;
+
+        let error = client_for(&server)
+            .await
+            .get_json("/api/v1/sources/")
+            .await
+            .unwrap_err();
+        let parsed = api_error(&error);
+        assert_eq!(parsed.status, 429);
+        assert_eq!(parsed.code.as_deref(), Some("rate_limited"));
+        assert_eq!(parsed.retry_after, Some(std::time::Duration::from_secs(23)));
+        assert!(error.to_string().contains("rate limited"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn check_status_errors_carry_the_status() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/me"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        let error = client_for(&server).await.me().await.unwrap_err();
+        assert_eq!(api_error(&error).status, 401);
+        assert!(error.to_string().contains("rejected"), "{error}");
     }
 }
