@@ -10,16 +10,13 @@ pub(crate) mod test_support;
 pub mod validation;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
+use serde_json::Value;
 
-use crate::tui::action::Effect;
-use crate::tui::action::{Mutation, Request};
-use crate::tui::app::App;
-use crate::tui::app::{Confirm, ConfirmAction, TypedName};
-use crate::tui::app::{FormPurpose, ModalForm};
+use crate::tui::action::{Effect, FetchError, Mutation, Request};
+use crate::tui::app::{App, Confirm, ConfirmAction, FormPurpose, ModalForm, TypedName};
 use crate::tui::budget::Priority;
 use crate::tui::editor::EditOutcome;
-use crate::tui::forms::form::FieldKind;
-use crate::tui::forms::form::Form;
+use crate::tui::forms::form::{FieldKind, Form};
 use crate::tui::model::{Connection, Destination, Source};
 use crate::tui::screen::{Screen, SourceTab};
 use crate::tui::status;
@@ -580,6 +577,188 @@ pub fn on_typed_confirm_key(app: &mut App, key: KeyEvent) -> Vec<Effect> {
     }
 }
 
+/// Which modal form belongs to a mutation, for inline errors.
+fn form_is_for(purpose: &FormPurpose, mutation: &Mutation) -> bool {
+    match (purpose, mutation) {
+        (FormPurpose::CreateSource, Mutation::CreateSource { .. })
+        | (FormPurpose::CreateDestination, Mutation::CreateDestination { .. })
+        | (FormPurpose::CreateConnection, Mutation::CreateConnection { .. }) => true,
+        (FormPurpose::EditSource { id }, Mutation::UpdateSource { id: target, .. })
+        | (FormPurpose::EditDestination { id }, Mutation::UpdateDestination { id: target, .. })
+        | (FormPurpose::EditConnection { id }, Mutation::UpdateConnection { id: target, .. }) => {
+            id == target
+        }
+        _ => false,
+    }
+}
+
+fn is_crud(mutation: &Mutation) -> bool {
+    matches!(
+        mutation,
+        Mutation::CreateSource { .. }
+            | Mutation::UpdateSource { .. }
+            | Mutation::DeleteSource { .. }
+            | Mutation::RotateSourceToken { .. }
+            | Mutation::CreateDestination { .. }
+            | Mutation::UpdateDestination { .. }
+            | Mutation::DeleteDestination { .. }
+            | Mutation::CreateConnection { .. }
+            | Mutation::UpdateConnection { .. }
+            | Mutation::DeleteConnection { .. }
+    )
+}
+
+fn close_modal_for(app: &mut App, mutation: &Mutation) {
+    if app
+        .modal
+        .as_ref()
+        .is_some_and(|modal| form_is_for(&modal.purpose, mutation))
+    {
+        app.modal = None;
+    }
+}
+
+/// Hooked at the top of `app::on_mutated`; `None` for mutations it does not own.
+pub fn on_mutated(
+    app: &mut App,
+    mutation: &Mutation,
+    result: &Result<Value, FetchError>,
+) -> Option<Vec<Effect>> {
+    if !is_crud(mutation) {
+        return None;
+    }
+    // A rejected key and rate limits keep Plan 3's handling.
+    if let Err(FetchError::Api(api)) = result {
+        if matches!(api.status, 401 | 429) {
+            return None;
+        }
+    }
+    Some(match result {
+        Ok(value) => on_success(app, mutation, value),
+        Err(error) => on_failure(app, mutation, error),
+    })
+}
+
+fn on_success(app: &mut App, mutation: &Mutation, value: &Value) -> Vec<Effect> {
+    close_modal_for(app, mutation);
+    let name = value["name"].as_str().unwrap_or("").to_string();
+    let separator = app.theme.glyphs.separator;
+    let mut follow_up = None;
+    let leaving = match mutation {
+        Mutation::CreateSource {
+            follow_up: body, ..
+        }
+        | Mutation::CreateConnection {
+            follow_up: body, ..
+        } => {
+            let id = value["id"].as_str().unwrap_or("").to_string();
+            if let (Some(body), false) = (body, id.is_empty()) {
+                follow_up = Some(match mutation {
+                    Mutation::CreateSource { .. } => Mutation::UpdateSource {
+                        id,
+                        body: body.clone(),
+                    },
+                    _ => Mutation::UpdateConnection {
+                        id,
+                        body: body.clone(),
+                    },
+                });
+            }
+            let message = if matches!(mutation, Mutation::CreateConnection { .. }) {
+                "Connected".to_string()
+            } else {
+                format!("Created {name}")
+            };
+            app.toast(message, Tone::Success);
+            false
+        }
+        Mutation::CreateDestination { .. } => {
+            app.toast(format!("Created {name}"), Tone::Success);
+            false
+        }
+        Mutation::UpdateSource { body, .. } | Mutation::UpdateDestination { body, .. } => {
+            let message = match body.get("status").and_then(Value::as_str) {
+                Some("paused") if body.as_object().is_some_and(|map| map.len() == 1) => {
+                    format!("Paused {name}")
+                }
+                Some("active") if body.as_object().is_some_and(|map| map.len() == 1) => {
+                    format!("Resumed {name}")
+                }
+                _ => "Saved".to_string(),
+            };
+            app.toast(message, Tone::Success);
+            false
+        }
+        Mutation::UpdateConnection { body, .. } => {
+            let message = match (body.get("enabled"), body.as_object().map(|map| map.len())) {
+                (Some(Value::Bool(true)), Some(1)) => "Connection enabled",
+                (Some(Value::Bool(false)), Some(1)) => "Connection disabled",
+                _ => "Saved",
+            };
+            app.toast(message, Tone::Success);
+            false
+        }
+        Mutation::RotateSourceToken { .. } => {
+            app.toast(
+                format!("Ingest token rotated {separator} the old URL stops working within ~30 s"),
+                Tone::Success,
+            );
+            false
+        }
+        Mutation::DeleteSource { id } => {
+            app.toast(
+                format!("Moved to trash {separator} restore with whk sources restore {id}"),
+                Tone::Success,
+            );
+            matches!(&app.screen, Screen::SourceDetail { id: open, .. } if open == id)
+        }
+        Mutation::DeleteDestination { id } => {
+            app.toast("Destination deleted", Tone::Success);
+            matches!(&app.screen, Screen::DestinationDetail { id: open } if open == id)
+        }
+        Mutation::DeleteConnection { id } => {
+            app.toast("Connection deleted", Tone::Success);
+            matches!(&app.screen, Screen::ConnectionDetail { id: open } if open == id)
+        }
+        _ => false,
+    };
+    // `back` enters the previous screen, which fetches it anyway.
+    let mut effects = if leaving {
+        app.back()
+    } else {
+        app.refresh_now()
+    };
+    if let Some(mutation) = follow_up {
+        effects.push(Effect::Mutate { mutation });
+    }
+    effects
+}
+
+/// 422, 409 and plan-limit 403 answers to a form go under the form, which
+/// stays open. Everything else closes it with a red toast and refreshes.
+fn on_failure(app: &mut App, mutation: &Mutation, error: &FetchError) -> Vec<Effect> {
+    if let (Some(modal), FetchError::Api(api)) = (app.modal.as_mut(), error) {
+        let inline = matches!(
+            (api.status, api.code.as_deref()),
+            (422 | 409, _) | (403, Some("plan_limit_exceeded"))
+        );
+        if inline && form_is_for(&modal.purpose, mutation) {
+            modal.form.submitting = false;
+            modal.form.error = Some(
+                if api.status == 409 && matches!(mutation, Mutation::CreateConnection { .. }) {
+                    "This source is already connected to that destination".to_string()
+                } else {
+                    error.message()
+                },
+            );
+            return Vec::new();
+        }
+    }
+    close_modal_for(app, mutation);
+    app.toast(error.message(), Tone::Danger);
+    app.refresh_now()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1008,5 +1187,176 @@ mod tests {
         copy.modal = app.modal.clone();
         copy.focus = app.focus;
         copy
+    }
+
+    use crate::client::ApiError;
+    use crate::tui::action::FetchError;
+
+    fn mutated(
+        app: &mut crate::tui::app::App,
+        mutation: Mutation,
+        result: Result<Value, FetchError>,
+    ) -> Vec<Effect> {
+        update(app, Action::Mutated { mutation, result })
+    }
+
+    fn api(status: u16, code: &str, message: &str) -> FetchError {
+        FetchError::Api(ApiError::synthetic(status, Some(code), message))
+    }
+
+    fn open_create_source(app: &mut crate::tui::app::App) -> Mutation {
+        press(app, KeyCode::Char('n'));
+        set_text(&mut app.modal.as_mut().unwrap().form, "name", "hooks");
+        mutations(&submit(app)).remove(0)
+    }
+
+    #[test]
+    fn a_created_source_closes_the_form_refreshes_and_patches_the_rest() {
+        let mut app = fixtures::app();
+        let mutation = Mutation::CreateSource {
+            body: json!({"name": "hooks"}),
+            follow_up: Some(json!({"description": "From the shop"})),
+        };
+        app.modal = Some(ModalForm {
+            form: source_form::create_form(),
+            purpose: FormPurpose::CreateSource,
+        });
+        let effects = mutated(
+            &mut app,
+            mutation,
+            Ok(json!({"id": "new-id", "name": "hooks"})),
+        );
+        assert!(app.modal.is_none());
+        assert_eq!(app.toasts.last().unwrap().text, "Created hooks");
+        assert!(effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::Fetch { .. })));
+        assert_eq!(
+            mutations(&effects),
+            vec![Mutation::UpdateSource {
+                id: "new-id".into(),
+                body: json!({"description": "From the shop"})
+            }]
+        );
+    }
+
+    #[test]
+    fn validation_errors_stay_inline_and_keep_the_form() {
+        let mut app = fixtures::app();
+        let mutation = open_create_source(&mut app);
+        mutated(
+            &mut app,
+            mutation,
+            Err(api(422, "validation_error", "name is taken")),
+        );
+        let form = &app.modal.as_ref().unwrap().form;
+        assert_eq!(form.error.as_deref(), Some("name is taken"));
+        assert!(!form.submitting);
+        assert!(app.toasts.is_empty());
+    }
+
+    #[test]
+    fn a_duplicate_connection_explains_itself() {
+        let mut app = fixtures::app();
+        app.screen = Screen::Connections;
+        press(&mut app, KeyCode::Char('n'));
+        let mutation = mutations(&submit(&mut app)).remove(0);
+        mutated(
+            &mut app,
+            mutation,
+            Err(api(409, "conflict", "connection already exists")),
+        );
+        assert_eq!(
+            app.modal.as_ref().unwrap().form.error.as_deref(),
+            Some("This source is already connected to that destination")
+        );
+    }
+
+    #[test]
+    fn plan_limits_are_inline_but_forbidden_is_a_toast() {
+        let mut app = fixtures::app();
+        let mutation = open_create_source(&mut app);
+        mutated(
+            &mut app,
+            mutation.clone(),
+            Err(api(
+                403,
+                "plan_limit_exceeded",
+                "source limit reached for your plan (3)",
+            )),
+        );
+        assert_eq!(
+            app.modal.as_ref().unwrap().form.error.as_deref(),
+            Some("source limit reached for your plan (3)")
+        );
+        mutated(
+            &mut app,
+            mutation,
+            Err(api(403, "forbidden", "not allowed")),
+        );
+        assert!(app.modal.is_none());
+        assert_eq!(app.toasts.last().unwrap().text, "not allowed");
+        assert_eq!(app.toasts.last().unwrap().tone, Tone::Danger);
+    }
+
+    #[test]
+    fn a_failed_confirmed_action_toasts_and_refreshes() {
+        let mut app = fixtures::app();
+        let effects = mutated(
+            &mut app,
+            Mutation::UpdateSource {
+                id: fixtures::STRIPE_ID.into(),
+                body: json!({"status": "paused"}),
+            },
+            Err(FetchError::Network("connection refused".into())),
+        );
+        assert_eq!(app.toasts.last().unwrap().text, "connection refused");
+        assert!(effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::Fetch { .. })));
+    }
+
+    #[test]
+    fn a_paused_source_is_announced() {
+        let mut app = fixtures::app();
+        mutated(
+            &mut app,
+            Mutation::UpdateSource {
+                id: fixtures::STRIPE_ID.into(),
+                body: json!({"status": "paused"}),
+            },
+            Ok(json!({"id": fixtures::STRIPE_ID, "name": "stripe-prod", "status": "paused"})),
+        );
+        assert_eq!(app.toasts.last().unwrap().text, "Paused stripe-prod");
+    }
+
+    #[test]
+    fn a_trashed_source_says_how_to_restore_it_and_leaves_its_detail() {
+        let mut app = fixtures::source_detail(SourceTab::Overview);
+        mutated(
+            &mut app,
+            Mutation::DeleteSource {
+                id: fixtures::STRIPE_ID.into(),
+            },
+            Ok(Value::Null),
+        );
+        assert_eq!(
+            app.toasts.last().unwrap().text,
+            format!(
+                "Moved to trash · restore with whk sources restore {}",
+                fixtures::STRIPE_ID
+            )
+        );
+        assert_eq!(app.screen, Screen::Sources);
+    }
+
+    #[test]
+    fn other_mutations_are_left_to_plan_3() {
+        let mut app = fixtures::app();
+        let replay = Mutation::ReplayEvent {
+            event_id: "e1".into(),
+            connection_ids: vec![],
+        };
+        assert!(on_mutated(&mut app, &replay, &Ok(json!({"created": 1}))).is_none());
     }
 }

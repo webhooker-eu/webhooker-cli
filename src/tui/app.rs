@@ -1022,6 +1022,9 @@ fn on_settings_saved(app: &mut App, result: Result<(), String>) -> Vec<Effect> {
 
 /// A finished write: toast the outcome, then refetch what it touched.
 fn on_mutated(app: &mut App, mutation: Mutation, result: Result<Value, FetchError>) -> Vec<Effect> {
+    if let Some(effects) = crate::tui::crud::on_mutated(app, &mutation, &result) {
+        return effects;
+    }
     let mut effects = match result {
         Ok(value) => mutation_succeeded(app, &mutation, &value),
         Err(error) => {
