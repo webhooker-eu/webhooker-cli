@@ -11,10 +11,12 @@ use serde_json::Value;
 use crate::client::ApiError;
 use crate::tui::action::{Action, Effect, FetchError, LoginSuccess, Request, GLOBAL_GENERATION};
 use crate::tui::budget::{self, Priority, FREE_API_PER_MINUTE};
+use crate::tui::events_state::EventScreens;
 use crate::tui::forms::input::TextInput;
 use crate::tui::forms::settings_form::SettingsForm;
 use crate::tui::model::{
-    Connection, Destination, Me, Page, PlanList, Source, SourceConnection, Workspace,
+    Connection, Destination, DlqEntry, DlqSummary, EventDetail, EventSummary, Me, Page, PlanList,
+    Source, SourceConnection, SourceVolume, StatsOverview, Workspace,
 };
 use crate::tui::names::NameCache;
 use crate::tui::poller::{self, PlanTier, Poller};
@@ -109,6 +111,12 @@ pub struct Data {
     pub destination: Loadable<Destination>,
     pub connections: Loadable<Vec<Connection>>,
     pub connection: Loadable<Connection>,
+    pub events: Loadable<Page<EventSummary>>,
+    pub event: Loadable<EventDetail>,
+    pub dlq_summary: Loadable<Page<DlqSummary>>,
+    pub dlq_entries: Loadable<Page<DlqEntry>>,
+    pub stats_overview: Loadable<StatsOverview>,
+    pub source_volume: Loadable<Page<SourceVolume>>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -244,6 +252,8 @@ pub struct App {
     pub settings_form: Option<SettingsForm>,
     /// Settings waiting for their write to succeed before they apply.
     pub pending_settings: Option<UiSettings>,
+    /// State of the Events, Live, event detail, DLQ and Stats screens.
+    pub event_screens: EventScreens,
     /// Scroll offset of the text pane on detail screens.
     pub scroll: u16,
     /// Largest useful `scroll`, written by the view that draws the pane.
@@ -290,6 +300,7 @@ impl App {
             login: LoginForm::for_server(&init.server),
             settings_form: None,
             pending_settings: None,
+            event_screens: EventScreens::default(),
             scroll: 0,
             scroll_limit: Cell::new(u16::MAX),
             size: init.size,
@@ -520,6 +531,12 @@ impl App {
             Request::Destination { .. } => &mut self.data.destination,
             Request::Connections => &mut self.data.connections,
             Request::Connection { .. } => &mut self.data.connection,
+            Request::Events { .. } => &mut self.data.events,
+            Request::Event { .. } => &mut self.data.event,
+            Request::DlqSummary { .. } => &mut self.data.dlq_summary,
+            Request::DlqEntries { .. } => &mut self.data.dlq_entries,
+            Request::StatsOverview { .. } => &mut self.data.stats_overview,
+            Request::SourceVolume { .. } => &mut self.data.source_volume,
         };
         Some(slot)
     }
@@ -659,6 +676,42 @@ impl App {
             }
             Request::Connection { .. } => {
                 self.data.connection.finish(decode(value)?, now);
+            }
+            Request::Events { .. } => {
+                let page: Page<EventSummary> = decode(value)?;
+                if let Some(scope) = self.visible_events_scope() {
+                    let state = self.event_screens.events_mut(scope);
+                    state.cursor = clamp_cursor(state.cursor, page.items.len());
+                }
+                self.data.events.finish(page, now);
+            }
+            Request::Event { .. } => {
+                let event: EventDetail = decode(value)?;
+                let deliveries = event.deliveries.len();
+                let view = &mut self.event_screens.detail;
+                view.delivery_cursor = clamp_cursor(view.delivery_cursor, deliveries);
+                self.data.event.finish(event, now);
+            }
+            Request::DlqSummary { .. } => {
+                let page: Page<DlqSummary> = decode(value)?;
+                let dlq = &mut self.event_screens.dlq;
+                dlq.summary_cursor = clamp_cursor(dlq.summary_cursor, page.items.len());
+                self.data.dlq_summary.finish(page, now);
+            }
+            Request::DlqEntries { .. } => {
+                self.data.dlq_entries.finish(decode(value)?, now);
+            }
+            Request::StatsOverview { .. } => {
+                self.data.stats_overview.finish(decode(value)?, now);
+            }
+            Request::SourceVolume { .. } => {
+                let page: Page<SourceVolume> = decode(value)?;
+                self.names.remember_sources(
+                    page.items
+                        .iter()
+                        .map(|volume| (volume.source_id.as_str(), volume.name.as_str())),
+                );
+                self.data.source_volume.finish(page, now);
             }
         }
         Ok(Vec::new())

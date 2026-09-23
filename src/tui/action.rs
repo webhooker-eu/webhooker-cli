@@ -11,6 +11,10 @@ use crate::args::query_string;
 use crate::client::ApiError;
 use crate::config::UiSection;
 use crate::tui::budget::Priority;
+use crate::tui::events_state::{
+    dlq_entries_path, events_path, source_volume_path, stats_overview_path, EventFilter,
+    StatsRange, TimeWindow,
+};
 use crate::tui::model::Me;
 
 /// Generation of fetches that belong to no screen (workspace, plans); their
@@ -22,13 +26,44 @@ pub const GLOBAL_GENERATION: u64 = 0;
 pub enum Request {
     Me,
     Plans,
-    Sources { search: Option<String> },
-    Source { id: String },
-    SourceConnections { source_id: String },
+    Sources {
+        search: Option<String>,
+    },
+    Source {
+        id: String,
+    },
+    SourceConnections {
+        source_id: String,
+    },
     Destinations,
-    Destination { id: String },
+    Destination {
+        id: String,
+    },
     Connections,
-    Connection { id: String },
+    Connection {
+        id: String,
+    },
+    Events {
+        filter: EventFilter,
+        page: i64,
+    },
+    Event {
+        id: String,
+    },
+    DlqSummary {
+        source_id: String,
+    },
+    DlqEntries {
+        source_id: String,
+        statuses: Vec<String>,
+        window: TimeWindow,
+    },
+    StatsOverview {
+        range: StatsRange,
+    },
+    SourceVolume {
+        range: StatsRange,
+    },
 }
 
 impl Request {
@@ -48,6 +83,18 @@ impl Request {
             Request::Destination { id } => format!("/api/v1/destinations/{id}"),
             Request::Connections => "/api/v1/connections/".to_string(),
             Request::Connection { id } => format!("/api/v1/connections/{id}"),
+            Request::Events { filter, page } => events_path(filter, *page, Utc::now()),
+            Request::Event { id } => format!("/api/v1/events/{id}"),
+            Request::DlqSummary { source_id } => {
+                format!("/api/v1/sources/{source_id}/dlq/summary")
+            }
+            Request::DlqEntries {
+                source_id,
+                statuses,
+                window,
+            } => dlq_entries_path(source_id, statuses, *window, Utc::now()),
+            Request::StatsOverview { range } => stats_overview_path(*range, Utc::now()),
+            Request::SourceVolume { range } => source_volume_path(*range, Utc::now()),
         }
     }
 
@@ -187,5 +234,30 @@ mod tests {
             FetchError::Api(ApiError::synthetic(403, None, "no access")).message(),
             "no access"
         );
+    }
+
+    #[test]
+    fn event_requests_have_paths_and_spend_budget() {
+        assert_eq!(
+            Request::Event { id: "e1".into() }.path(),
+            "/api/v1/events/e1"
+        );
+        assert_eq!(
+            Request::DlqSummary {
+                source_id: "s1".into()
+            }
+            .path(),
+            "/api/v1/sources/s1/dlq/summary"
+        );
+        assert!(Request::Events {
+            filter: crate::tui::events_state::EventFilter::default(),
+            page: 1
+        }
+        .path()
+        .starts_with("/api/v1/events/?page=1"));
+        assert!(Request::StatsOverview {
+            range: crate::tui::events_state::StatsRange::Day
+        }
+        .is_metered());
     }
 }
