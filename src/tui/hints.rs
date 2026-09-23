@@ -160,6 +160,15 @@ pub fn hints(app: &App) -> Vec<Hint> {
     }
 }
 
+/// The hint bar: the screen's hints with the CRUD keys after `enter open`.
+pub fn all_hints(app: &App) -> Vec<Hint> {
+    let mut hints = hints(app);
+    let extra = crate::tui::crud::hints(app);
+    let position = usize::from(hints.first() == Some(&("enter", "open")));
+    hints.splice(position..position, extra);
+    hints
+}
+
 pub fn help(screen: &Screen) -> Vec<(&'static str, Vec<Hint>)> {
     let mut sections = vec![(
         "Global",
@@ -219,6 +228,17 @@ pub fn help(screen: &Screen) -> Vec<(&'static str, Vec<Hint>)> {
     };
     if !specific.is_empty() {
         sections.push(("This screen", specific));
+    }
+    if matches!(
+        screen,
+        Screen::Sources
+            | Screen::SourceDetail { .. }
+            | Screen::Destinations
+            | Screen::DestinationDetail { .. }
+            | Screen::Connections
+            | Screen::ConnectionDetail { .. }
+    ) {
+        sections.push(crate::tui::crud::help());
     }
     sections
 }

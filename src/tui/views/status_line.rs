@@ -11,7 +11,7 @@ use crate::tui::theme::Tone;
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let theme = &app.theme;
     let mut spans = vec![Span::raw(" ")];
-    for (index, (key, label)) in hints::hints(app).into_iter().enumerate() {
+    for (index, (key, label)) in hints::all_hints(app).into_iter().enumerate() {
         if index > 0 {
             spans.push(Span::styled(
                 format!(" {} ", theme.glyphs.separator),

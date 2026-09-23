@@ -199,7 +199,7 @@ fn sources_list() {
         "1 conn ",
         "verify: stripe",
         "paused",
-        "enter open · / filter",
+        "enter open · n new · e edit · D delete · / filter",
     ] {
         assert!(text.contains(expected), "missing {expected:?} in\n{text}");
     }

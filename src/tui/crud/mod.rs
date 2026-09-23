@@ -13,11 +13,12 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use serde_json::Value;
 
 use crate::tui::action::{Effect, FetchError, Mutation, Request};
-use crate::tui::app::{App, Confirm, ConfirmAction, FormPurpose, ModalForm, TypedName};
+use crate::tui::app::{App, Confirm, ConfirmAction, Focus, FormPurpose, ModalForm, TypedName};
 use crate::tui::budget::Priority;
 use crate::tui::clipboard::{self, CopyMethod, CopyValue};
 use crate::tui::editor::EditOutcome;
 use crate::tui::forms::form::{FieldKind, Form};
+use crate::tui::hints::Hint;
 use crate::tui::model::{Connection, Destination, Source};
 use crate::tui::screen::{Screen, SourceTab};
 use crate::tui::status;
@@ -801,6 +802,89 @@ pub fn on_copy_key(app: &mut App, key: &KeyEvent) -> Option<Vec<Effect>> {
     Some(Vec::new())
 }
 
+/// Hints spliced into the hint bar after a leading `enter open`.
+pub fn hints(app: &App) -> Vec<Hint> {
+    if app.focus != Focus::Main
+        || app.confirm.is_some()
+        || app.help_open
+        || app.source_search.is_some()
+        || app.modal.is_some()
+        || app.copy_value.is_some()
+        || !on_crud_screen(app)
+    {
+        return Vec::new();
+    }
+    let mut hints: Vec<Hint> = Vec::new();
+    let detail = matches!(
+        app.screen,
+        Screen::SourceDetail {
+            tab: SourceTab::Overview,
+            ..
+        } | Screen::DestinationDetail { .. }
+            | Screen::ConnectionDetail { .. }
+    );
+    let creates = matches!(
+        app.screen,
+        Screen::Sources
+            | Screen::Destinations
+            | Screen::Connections
+            | Screen::SourceDetail {
+                tab: SourceTab::Connections,
+                ..
+            }
+    );
+    if creates {
+        hints.push(("n", "new"));
+    }
+    let target = target(app);
+    if !matches!(
+        app.screen,
+        Screen::SourceDetail {
+            tab: SourceTab::Connections,
+            ..
+        }
+    ) {
+        hints.push(("e", "edit"));
+    }
+    if detail {
+        hints.push(("y", "copy"));
+    }
+    match &target {
+        Some(Target::Source(source)) if detail => {
+            if let Some(next) = status::toggled_status(&source.status) {
+                hints.push(("P", if next == "paused" { "pause" } else { "resume" }));
+            }
+            hints.push(("T", "rotate"));
+        }
+        Some(Target::Destination(destination)) if detail => {
+            if let Some(next) = status::toggled_status(&destination.status) {
+                hints.push(("P", if next == "paused" { "pause" } else { "resume" }));
+            }
+        }
+        Some(Target::Connection { enabled, .. }) => {
+            hints.push(("E", if *enabled { "disable" } else { "enable" }));
+        }
+        _ => {}
+    }
+    hints.push(("D", "delete"));
+    hints
+}
+
+pub fn help() -> (&'static str, Vec<Hint>) {
+    (
+        "Changes",
+        vec![
+            ("n", "new"),
+            ("e", "edit (json fields: enter opens $EDITOR)"),
+            ("y", "copy the URL or id"),
+            ("P", "pause / resume"),
+            ("E", "enable / disable a connection"),
+            ("T", "rotate a source's ingest token"),
+            ("D", "delete (sources and destinations: type the name)"),
+        ],
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1445,5 +1529,45 @@ mod tests {
                 text: fixtures::STRIPE_BILLING_ID.into()
             }]
         );
+    }
+
+    #[test]
+    fn crud_hints_follow_the_screen() {
+        let app = fixtures::app();
+        let hints = crate::tui::hints::all_hints(&app);
+        assert_eq!(
+            &hints[..4],
+            &[
+                ("enter", "open"),
+                ("n", "new"),
+                ("e", "edit"),
+                ("D", "delete")
+            ]
+        );
+        let detail = fixtures::source_detail(SourceTab::Overview);
+        let hints = crate::tui::hints::all_hints(&detail);
+        for expected in [
+            ("e", "edit"),
+            ("y", "copy"),
+            ("P", "pause"),
+            ("T", "rotate"),
+            ("D", "delete"),
+        ] {
+            assert!(hints.contains(&expected), "{hints:?}");
+        }
+        let connections = fixtures::connection_detail();
+        assert!(crate::tui::hints::all_hints(&connections).contains(&("E", "disable")));
+        let mut modal = fixtures::app();
+        press(&mut modal, KeyCode::Char('n'));
+        assert!(!crate::tui::hints::all_hints(&modal).contains(&("n", "new")));
+    }
+
+    #[test]
+    fn help_lists_the_change_keys() {
+        let help = crate::tui::hints::help(&Screen::Sources);
+        let changes = help.iter().find(|(title, _)| *title == "Changes").unwrap();
+        assert!(changes
+            .1
+            .contains(&("D", "delete (sources and destinations: type the name)")));
     }
 }
