@@ -10,7 +10,10 @@ use ratatui::Terminal;
 use super::render;
 use crate::tui::app::{App, Confirm, ConfirmAction};
 use crate::tui::fixtures;
+use crate::tui::forms::input::TextInput;
 use crate::tui::screen::Section;
+use crate::tui::screen::SourceTab;
+use crate::tui::settings::ThemeChoice;
 use crate::tui::theme::Tone;
 
 pub(super) fn draw(app: &App, width: u16, height: u16) -> Terminal<TestBackend> {
@@ -181,4 +184,91 @@ fn settings_show_unsaved_changes_and_errors() {
     assert!(screen_text(&app, 120, 40).contains("Unsaved changes"));
     app.settings_form.as_mut().unwrap().error = Some("disk full".into());
     assert!(screen_text(&app, 120, 40).contains("disk full"));
+}
+
+#[test]
+fn sources_list() {
+    let app = fixtures::app();
+    snapshot_both_sizes("sources", &app);
+    let text = screen_text(&app, 120, 40);
+    for expected in [
+        "stripe-prod",
+        "1 204 events",
+        "2 conns",
+        "1 conn ",
+        "verify: stripe",
+        "paused",
+        "enter open · / filter",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?} in\n{text}");
+    }
+}
+
+#[test]
+fn sources_list_in_every_theme() {
+    let dark = fixtures::app();
+    insta::assert_debug_snapshot!(
+        "sources_dark_styles",
+        draw(&dark, 80, 24).backend().buffer()
+    );
+    let mut light = fixtures::app();
+    light.apply_settings(crate::tui::settings::UiSettings {
+        theme: ThemeChoice::Light,
+        ..light.settings.clone()
+    });
+    insta::assert_debug_snapshot!(
+        "sources_light_styles",
+        draw(&light, 80, 24).backend().buffer()
+    );
+    let ascii_app = ascii(fixtures::app());
+    assert_snapshot!("sources_ascii_80x24", draw(&ascii_app, 80, 24).backend());
+    assert!(screen_text(&ascii_app, 80, 24).is_ascii());
+}
+
+#[test]
+fn sources_empty_filtering_and_search() {
+    let mut app = fixtures::app();
+    let loaded = fixtures::loaded_at(&app);
+    app.data.sources.finish(Vec::new(), loaded);
+    assert!(screen_text(&app, 80, 24).contains("No sources yet. Press n to create one."));
+    app.source_query = Some("zzz".into());
+    assert!(screen_text(&app, 80, 24).contains("No sources match \"zzz\"."));
+    app.source_search = Some(TextInput::new("str", false));
+    let text = screen_text(&app, 80, 24);
+    assert!(text.contains("/str"));
+    assert!(text.contains("enter apply filter · esc cancel"));
+}
+
+#[test]
+fn source_overview() {
+    let app = fixtures::source_detail(SourceTab::Overview);
+    snapshot_both_sizes("source_overview", &app);
+    let text = screen_text(&app, 120, 40);
+    for expected in [
+        "1 Overview",
+        "5 DLQ",
+        "https://app.webhooker.eu/in/6b225n04u5kmyg",
+        "stripe (secret ***)",
+        "#3b82f6",
+        "2026-09-01 10:00:00",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?} in\n{text}");
+    }
+}
+
+#[test]
+fn source_connections_tab() {
+    let app = fixtures::source_detail(SourceTab::Connections);
+    snapshot_both_sizes("source_connections", &app);
+    let text = screen_text(&app, 120, 40);
+    assert!(text.contains("billing-worker"));
+    assert!(text.contains("billing.internal"));
+    // ⚡ is two columns wide, so the buffer holds a padding cell after it.
+    assert!(text.contains('⚡') && text.contains(" open"));
+}
+
+#[test]
+fn later_tabs_say_they_are_not_available_yet() {
+    let app = fixtures::source_detail(SourceTab::Live);
+    assert!(screen_text(&app, 120, 40).contains("This tab is not available yet."));
 }

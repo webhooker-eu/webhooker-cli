@@ -9,6 +9,8 @@ mod login;
 mod placeholder;
 mod settings;
 mod sidebar;
+mod source_detail;
+mod sources;
 mod status_line;
 mod too_small;
 
@@ -73,6 +75,8 @@ fn render_body(frame: &mut Frame, body: Rect, app: &App) {
 
 fn render_screen(frame: &mut Frame, area: Rect, app: &App) {
     match &app.screen {
+        Screen::Sources => sources::render(frame, area, app),
+        Screen::SourceDetail { tab, .. } => source_detail::render(frame, area, app, *tab),
         Screen::Settings => settings::render(frame, area, app),
         _ => placeholder::render(frame, area, app),
     }
