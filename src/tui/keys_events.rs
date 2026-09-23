@@ -194,6 +194,31 @@ fn turn_page(app: &mut App, scope: EventsScope, step: i64) -> Vec<Effect> {
     app.enter()
 }
 
+pub fn on_live_key(app: &mut App, code: KeyCode) -> Vec<Effect> {
+    let live = &mut app.event_screens.live;
+    if let Some(cursor) = keys::moved(live.cursor, live.rows.len(), code) {
+        live.cursor = cursor;
+        return Vec::new();
+    }
+    match code {
+        KeyCode::Char('f') => {
+            live.follow = !live.follow;
+            if live.follow {
+                live.cursor = 0;
+            }
+            Vec::new()
+        }
+        KeyCode::Enter => {
+            let selected = live.rows.get(live.cursor).map(|row| row.id.clone());
+            match selected {
+                Some(id) => app.open(Screen::EventDetail { id }),
+                None => Vec::new(),
+            }
+        }
+        _ => Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -392,5 +417,27 @@ mod tests {
         press(&mut app, KeyCode::Char(']'));
         assert_eq!(app.event_screens.source.page, 2);
         assert_eq!(app.event_screens.global.page, 1);
+    }
+
+    #[test]
+    fn the_live_feed_moves_follows_and_opens() {
+        let mut app = fixtures::live_app();
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.event_screens.live.cursor, 1);
+        press(&mut app, KeyCode::Char('f'));
+        assert!(!app.event_screens.live.follow);
+        press(&mut app, KeyCode::Char('f'));
+        assert!(app.event_screens.live.follow);
+        assert_eq!(
+            app.event_screens.live.cursor, 0,
+            "following jumps to the newest"
+        );
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(
+            app.screen,
+            Screen::EventDetail {
+                id: "id-evt_new".into()
+            }
+        );
     }
 }

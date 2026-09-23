@@ -386,3 +386,31 @@ pub fn events_app() -> App {
     app.event_screens.shown = Some((crate::tui::events_state::EventFilter::default(), 1));
     app
 }
+
+/// The Live tab of stripe-prod with two rows from the tail.
+pub fn live_app() -> App {
+    use crate::tui::events_state::{TailStatus, TailSubscription};
+    use crate::tui::model::{EventSummary, TailNotice};
+    let mut app = source_detail(SourceTab::Live);
+    app.event_screens.tail = Some(TailSubscription {
+        source_id: STRIPE_ID.into(),
+        subscription: 1,
+        status: TailStatus::Live,
+    });
+    app.event_screens.live.rows = ["evt_new", "evt_old"]
+        .iter()
+        .map(|public_id| {
+            EventSummary::from_notice(&TailNotice {
+                event_id: format!("id-{public_id}"),
+                public_id: public_id.to_string(),
+                source_id: STRIPE_ID.into(),
+                method: "POST".into(),
+                received_at: "2026-09-23T12:04:11Z".into(),
+                content_type: Some("application/json".into()),
+                body_size: 812,
+                verification_status: "verified".into(),
+            })
+        })
+        .collect();
+    app
+}

@@ -59,6 +59,15 @@ pub fn hints(app: &App) -> Vec<Hint> {
             ("1-5", "tabs"),
             ("esc", "back"),
         ],
+        Screen::SourceDetail {
+            tab: SourceTab::Live,
+            ..
+        } => vec![
+            ("enter", "open"),
+            ("f", "follow"),
+            ("1-5", "tabs"),
+            ("esc", "back"),
+        ],
         Screen::SourceDetail { .. } => vec![
             ("1-5", "tabs"),
             ("esc", "back"),

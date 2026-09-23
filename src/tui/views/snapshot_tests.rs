@@ -270,7 +270,7 @@ fn source_connections_tab() {
 
 #[test]
 fn later_tabs_say_they_are_not_available_yet() {
-    let app = fixtures::source_detail(SourceTab::Live);
+    let app = fixtures::source_detail(SourceTab::Dlq);
     assert!(screen_text(&app, 120, 40).contains("This tab is not available yet."));
 }
 
@@ -435,4 +435,30 @@ fn event_filter_form() {
         crate::tui::events_state::EventsScope::Global,
     );
     assert_snapshot!("form_event_filters_80x24", draw(&app, 80, 24).backend());
+}
+
+#[test]
+fn live_tab() {
+    let app = fixtures::live_app();
+    snapshot_both_sizes("live", &app);
+    let text = screen_text(&app, 120, 40);
+    assert!(text.contains("● live"));
+    assert!(text.contains("follow on"));
+    assert!(text.contains("evt_new"));
+}
+
+#[test]
+fn live_tab_states() {
+    let mut app = fixtures::live_app();
+    app.event_screens.live.rows.clear();
+    assert!(screen_text(&app, 120, 40)
+        .contains("Waiting for webhooks… Send one to https://app.webhooker.eu/in/6b225n04u5kmyg"));
+    app.event_screens.tail.as_mut().unwrap().status =
+        crate::tui::events_state::TailStatus::Reconnecting {
+            reason: "stream closed".into(),
+        };
+    assert!(screen_text(&app, 120, 40).contains("reconnecting (stream closed)"));
+    app.event_screens.tail.as_mut().unwrap().status =
+        crate::tui::events_state::TailStatus::Failed("source not found on the server".into());
+    assert!(screen_text(&app, 120, 40).contains("✕ source not found on the server"));
 }

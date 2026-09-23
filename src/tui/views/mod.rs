@@ -10,6 +10,7 @@ mod events;
 mod form;
 mod header;
 mod help;
+mod live;
 mod login;
 mod placeholder;
 mod settings;

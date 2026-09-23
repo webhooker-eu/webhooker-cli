@@ -232,6 +232,9 @@ fn on_source_detail_key(app: &mut App, code: KeyCode, tab: SourceTab) -> Vec<Eff
         KeyCode::Esc => return app.back(),
         _ => {}
     }
+    if tab == SourceTab::Live {
+        return keys_events::on_live_key(app, code);
+    }
     if tab == SourceTab::Events {
         return keys_events::on_events_list_key(app, code, EventsScope::Source);
     }
