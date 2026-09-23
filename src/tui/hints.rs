@@ -21,6 +21,9 @@ pub fn hints(app: &App) -> Vec<Hint> {
     if app.event_screens.detail.header_search.is_some() {
         return vec![("enter", "apply filter"), ("esc", "cancel")];
     }
+    if crate::tui::relay_control::search_active(app) {
+        return vec![("enter", "apply search"), ("esc", "cancel")];
+    }
     if app.focus == Focus::Sidebar && app.screen != Screen::Login {
         return vec![
             ("j/k", "section"),
@@ -39,6 +42,7 @@ pub fn hints(app: &App) -> Vec<Hint> {
         Screen::Sources => vec![
             ("enter", "open"),
             ("/", "filter"),
+            ("L", "relay"),
             ("r", "refresh"),
             ("?", "help"),
             ("q", "quit"),
@@ -134,9 +138,19 @@ pub fn hints(app: &App) -> Vec<Hint> {
             ("?", "help"),
             ("q", "quit"),
         ],
-        Screen::Relay => {
-            vec![("g", "jump"), ("?", "help"), ("q", "quit")]
-        }
+        Screen::Relay if app.relay.is_some() => vec![
+            ("p", "replay locally"),
+            ("u", "change URL"),
+            ("x", "stop"),
+            ("enter", "expand"),
+            ("/", "search"),
+        ],
+        Screen::Relay => vec![
+            ("n", "new relay"),
+            ("g", "jump"),
+            ("?", "help"),
+            ("q", "quit"),
+        ],
     }
 }
 
@@ -155,7 +169,7 @@ pub fn help(screen: &Screen) -> Vec<(&'static str, Vec<Hint>)> {
         ],
     )];
     let specific: Vec<Hint> = match screen {
-        Screen::Sources => vec![("/", "filter by name")],
+        Screen::Sources => vec![("/", "filter by name"), ("L", "relay this source")],
         Screen::SourceDetail { .. } => vec![("1-5", "switch tab"), ("h/l", "previous / next tab")],
         Screen::DestinationDetail { .. } | Screen::ConnectionDetail { .. } => vec![
             ("j/k", "scroll"),
@@ -187,6 +201,14 @@ pub fn help(screen: &Screen) -> Vec<(&'static str, Vec<Hint>)> {
             ("R", "resend the selected connection"),
         ],
         Screen::Stats => vec![("h/l, 1-3", "range: 24h, 7d, 30d")],
+        Screen::Relay => vec![
+            ("n", "start a relay"),
+            ("p", "replay the selected request locally"),
+            ("u", "change the target URL"),
+            ("x", "stop the relay"),
+            ("enter", "expand request and response"),
+            ("/", "search"),
+        ],
         _ => Vec::new(),
     };
     if !specific.is_empty() {

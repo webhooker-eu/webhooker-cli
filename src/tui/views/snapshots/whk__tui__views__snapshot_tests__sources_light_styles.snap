@@ -28,7 +28,7 @@ Buffer {
         "│                                                                              │",
         "│                                                                              │",
         "└──────────────────────────────────────────────────────────────────────────────┘",
-        " enter open · / filter · r refresh · ? help · q quit                     3s ago ",
+        " enter open · / filter · L relay · r refresh · ? help · q quit           3s ago ",
     ],
     styles: [
         x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
@@ -132,11 +132,13 @@ Buffer {
         x: 15, y: 23, fg: Rgb(110, 119, 129), bg: Reset, underline: Reset, modifier: NONE,
         x: 25, y: 23, fg: Rgb(124, 92, 255), bg: Reset, underline: Reset, modifier: NONE,
         x: 26, y: 23, fg: Rgb(110, 119, 129), bg: Reset, underline: Reset, modifier: NONE,
-        x: 37, y: 23, fg: Rgb(124, 92, 255), bg: Reset, underline: Reset, modifier: NONE,
-        x: 38, y: 23, fg: Rgb(110, 119, 129), bg: Reset, underline: Reset, modifier: NONE,
-        x: 46, y: 23, fg: Rgb(124, 92, 255), bg: Reset, underline: Reset, modifier: NONE,
-        x: 47, y: 23, fg: Rgb(110, 119, 129), bg: Reset, underline: Reset, modifier: NONE,
-        x: 52, y: 23, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 35, y: 23, fg: Rgb(124, 92, 255), bg: Reset, underline: Reset, modifier: NONE,
+        x: 36, y: 23, fg: Rgb(110, 119, 129), bg: Reset, underline: Reset, modifier: NONE,
+        x: 47, y: 23, fg: Rgb(124, 92, 255), bg: Reset, underline: Reset, modifier: NONE,
+        x: 48, y: 23, fg: Rgb(110, 119, 129), bg: Reset, underline: Reset, modifier: NONE,
+        x: 56, y: 23, fg: Rgb(124, 92, 255), bg: Reset, underline: Reset, modifier: NONE,
+        x: 57, y: 23, fg: Rgb(110, 119, 129), bg: Reset, underline: Reset, modifier: NONE,
+        x: 62, y: 23, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 73, y: 23, fg: Rgb(110, 119, 129), bg: Reset, underline: Reset, modifier: NONE,
     ]
 }

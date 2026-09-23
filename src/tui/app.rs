@@ -154,6 +154,7 @@ pub enum ConfirmAction {
         since: Option<String>,
         until: Option<String>,
     },
+    QuitAndStopRelay,
 }
 
 /// A yes/no question; only `y` confirms. The target is drawn in bold.
@@ -216,6 +217,8 @@ pub enum FormPurpose {
         exhausted: i64,
         failed: i64,
     },
+    Relay,
+    RelayTarget,
 }
 
 #[derive(Debug, Clone)]
@@ -425,8 +428,16 @@ impl App {
         });
     }
 
-    /// Plan 4 asks for confirmation here while a relay runs.
+    /// Asks for confirmation while a relay runs.
     pub fn request_quit(&mut self) {
+        // A second Ctrl+C while the question is open quits for real.
+        if self.confirm.is_none() && self.relay.as_ref().is_some_and(RelayState::is_live) {
+            self.confirm = Some(Confirm::plain(
+                "Relay is running. Quit and stop it?",
+                ConfirmAction::QuitAndStopRelay,
+            ));
+            return;
+        }
         self.quit = true;
     }
 
@@ -837,8 +848,13 @@ pub fn update(app: &mut App, action: Action) -> Vec<Effect> {
             crate::tui::relay_control::on_update(app, session, update)
         }
         Action::Terminate => {
+            // Signals never ask: stop the relay first, then quit.
             app.quit = true;
-            Vec::new()
+            if app.relay.take().is_some() {
+                vec![Effect::StopRelay]
+            } else {
+                Vec::new()
+            }
         }
     }
 }

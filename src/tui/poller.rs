@@ -65,12 +65,13 @@ pub fn schedule(
         ],
         Screen::Connections => vec![Request::Connections, all_sources, Request::Destinations],
         Screen::ConnectionDetail { id } => vec![Request::Connection { id: id.clone() }],
+        // The relay form lists the sources; the inspector names them.
+        Screen::Relay => vec![all_sources],
         Screen::Login
         | Screen::Settings
         | Screen::Events
         | Screen::Dlq
         | Screen::Stats
-        | Screen::Relay
         | Screen::EventDetail { .. } => Vec::new(),
     };
     requests

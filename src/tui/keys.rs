@@ -50,6 +50,9 @@ pub fn handle(app: &mut App, key: KeyEvent) -> Vec<Effect> {
     if app.source_search.is_some() {
         return on_search_key(app, key);
     }
+    if crate::tui::relay_control::search_active(app) {
+        return crate::tui::relay_control::on_search_key(app, key);
+    }
     if app.event_screens.detail.header_search.is_some() {
         return keys_events::on_header_search_key(app, key);
     }
@@ -180,7 +183,8 @@ fn on_main_key(app: &mut App, code: KeyCode) -> Vec<Effect> {
         Screen::EventDetail { .. } => keys_events::on_event_detail_key(app, code),
         Screen::Dlq => keys_events::on_dlq_key(app, code),
         Screen::Stats => keys_events::on_stats_key(app, code),
-        Screen::Relay | Screen::Settings => to_sidebar(app, code),
+        Screen::Relay => crate::tui::relay_control::on_key(app, code),
+        Screen::Settings => to_sidebar(app, code),
         Screen::Login => Vec::new(),
     }
 }
@@ -215,11 +219,19 @@ fn on_sources_key(app: &mut App, code: KeyCode) -> Vec<Effect> {
             ));
             Vec::new()
         }
+        KeyCode::Char('L') => {
+            let source = crate::tui::relay_control::source_in_view(app);
+            crate::tui::relay_control::open_start_form(app, source)
+        }
         other => to_sidebar(app, other),
     }
 }
 
 fn on_source_detail_key(app: &mut App, code: KeyCode, tab: SourceTab) -> Vec<Effect> {
+    if code == KeyCode::Char('L') {
+        let source = crate::tui::relay_control::source_in_view(app);
+        return crate::tui::relay_control::open_start_form(app, source);
+    }
     match code {
         KeyCode::Char(digit @ '1'..='5') => {
             let index = usize::from(digit as u8 - b'1');
@@ -440,6 +452,8 @@ pub fn submit_modal(app: &mut App) -> Vec<Effect> {
         } => {
             keys_events::submit_bulk_resend(app, connection_id, destination_name, exhausted, failed)
         }
+        FormPurpose::Relay => crate::tui::relay_control::submit_start(app),
+        FormPurpose::RelayTarget => crate::tui::relay_control::submit_retarget(app),
     }
 }
 
@@ -487,6 +501,11 @@ fn confirmed(app: &mut App, action: ConfirmAction) -> Vec<Effect> {
                 until,
             },
         }],
+        ConfirmAction::QuitAndStopRelay => {
+            app.relay = None;
+            app.quit = true;
+            vec![Effect::StopRelay]
+        }
     }
 }
 
