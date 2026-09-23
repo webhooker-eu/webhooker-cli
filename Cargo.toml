@@ -1,0 +1,29 @@
+[package]
+name = "whk"
+version = "0.1.0"
+edition = "2021"
+description = "Webhooker CLI: manage sources, destinations and events, and relay webhooks to localhost"
+license = "MIT"
+repository = "https://github.com/webhooker-eu/webhooker-cli"
+homepage = "https://webhooker.eu"
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+clap = { version = "4", features = ["derive", "env"] }
+dirs = "6"
+futures = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "json", "stream"] }
+rpassword = "7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+toml = "0.8"
+
+[dev-dependencies]
+tempfile = "3"
+wiremock = "0.6"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
