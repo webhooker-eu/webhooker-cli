@@ -193,3 +193,72 @@ async fn dlq_resend_posts_a_bulk_resend() {
     assert!(output.status.success(), "{}", stderr_of(&output));
     assert_eq!(stdout_of(&output), "Queued 3 delivery(ies)\n");
 }
+
+#[tokio::test]
+async fn stats_overview_resolves_sources_to_ids() {
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    mount_sources(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/stats/overview"))
+        .and(query_param("source_ids", SOURCE_ID))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "total_events": 2,
+            "events_per_bucket": [],
+            "bucket_unit": "hour",
+            "range_start": "2026-09-22T12:00:00Z",
+            "range_end": "2026-09-23T12:00:00Z",
+            "deliveries_by_status": [],
+            "failed_attempts": 0,
+            "e2e_latency_ms": {"p50_ms": null, "p95_ms": null, "p99_ms": null}
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let text = run_whk(
+        &server.uri(),
+        &["stats", "overview", "--source", "stripe-prod"],
+        None,
+    )
+    .await;
+    assert!(text.status.success(), "{}", stderr_of(&text));
+    assert!(
+        stdout_of(&text).contains("events:          2"),
+        "{}",
+        stdout_of(&text)
+    );
+
+    let json = run_whk(
+        &server.uri(),
+        &["--json", "stats", "overview", "--source", "stripe-prod"],
+        None,
+    )
+    .await;
+    let parsed: serde_json::Value = serde_json::from_str(stdout_of(&json).trim()).unwrap();
+    assert_eq!(parsed["total_events"], 2);
+}
+
+#[tokio::test]
+async fn stats_by_source_prints_the_volume_table() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/stats/volume-by-source"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "items": [{"source_id": "s1", "name": "stripe-prod", "color": null, "count": 12}]
+        })))
+        .mount(&server)
+        .await;
+
+    let output = run_whk(&server.uri(), &["stats", "by-source"], None).await;
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    assert_eq!(
+        stdout_of(&output),
+        "NAME         EVENTS  SOURCE ID\nstripe-prod  12      s1\n"
+    );
+}

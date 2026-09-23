@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use whk::commands::{connections, destinations, dlq, events, sources};
+use whk::commands::{connections, destinations, dlq, events, sources, stats};
 use whk::{args, client, config, listen, tail};
 
 #[derive(Parser)]
@@ -86,6 +86,11 @@ enum Command {
     Dlq {
         #[command(subcommand)]
         command: DlqCommand,
+    },
+    /// Delivery statistics for the workspace
+    Stats {
+        #[command(subcommand)]
+        command: StatsCommand,
     },
     /// Remove the saved credentials
     Logout,
@@ -347,6 +352,29 @@ enum DlqCommand {
     },
 }
 
+#[derive(Subcommand)]
+enum StatsCommand {
+    /// Event volume, deliveries by status, latency and failed attempts
+    Overview {
+        /// Limit to these sources (name, id or ingest token; repeatable)
+        #[arg(long = "source")]
+        sources: Vec<String>,
+        /// RFC 3339 timestamp; defaults to the first event
+        #[arg(long)]
+        since: Option<String>,
+        /// RFC 3339 timestamp; defaults to now
+        #[arg(long)]
+        until: Option<String>,
+    },
+    /// Event volume per source
+    BySource {
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
+        until: Option<String>,
+    },
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let Cli {
@@ -415,6 +443,9 @@ async fn main() -> Result<()> {
         }
         Command::Dlq { command } => {
             run_dlq_command(connect(&server, &api_key)?, command, json).await
+        }
+        Command::Stats { command } => {
+            run_stats_command(connect(&server, &api_key)?, command, json).await
         }
     }
 }
@@ -666,6 +697,33 @@ async fn run_dlq_command(client: client::ApiClient, command: DlqCommand, json: b
                 json,
             )
             .await
+        }
+    }
+}
+
+async fn run_stats_command(
+    client: client::ApiClient,
+    command: StatsCommand,
+    json: bool,
+) -> Result<()> {
+    match command {
+        StatsCommand::Overview {
+            sources,
+            since,
+            until,
+        } => {
+            let window = stats::Window {
+                since: since.as_deref(),
+                until: until.as_deref(),
+            };
+            stats::overview(&client, &sources, window, json).await
+        }
+        StatsCommand::BySource { since, until } => {
+            let window = stats::Window {
+                since: since.as_deref(),
+                until: until.as_deref(),
+            };
+            stats::by_source(&client, window, json).await
         }
     }
 }
