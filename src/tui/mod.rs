@@ -146,7 +146,7 @@ async fn event_loop(
     let shutdown = shutdown_signal();
     tokio::pin!(shutdown);
     for effect in app.start() {
-        worker.run(effect);
+        dispatch(terminal, &mut input, app, worker, effect)?;
     }
     while !app.quit {
         terminal.draw(|frame| views::render(frame, app))?;
@@ -164,10 +164,53 @@ async fn event_loop(
             _ = &mut shutdown => Action::Terminate,
         };
         for effect in app::update(app, action) {
-            worker.run(effect);
+            dispatch(terminal, &mut input, app, worker, effect)?;
         }
     }
     Ok(())
+}
+
+/// Runs one effect: terminal effects here, everything else on the worker.
+fn dispatch(
+    terminal: &mut ratatui::DefaultTerminal,
+    input: &mut EventStream,
+    app: &mut App,
+    worker: &Worker,
+    effect: action::Effect,
+) -> Result<()> {
+    match effect {
+        action::Effect::EditJson { field_key, text } => {
+            // Dropping the old stream stops its reader thread before the
+            // editor needs the keyboard.
+            *input = EventStream::new();
+            let command = editor::EditorCommand::from_env();
+            let result = suspend(terminal, || editor::edit(&command, &text))?;
+            for follow_up in app::update(app, Action::JsonEdited { field_key, result }) {
+                dispatch(terminal, input, app, worker, follow_up)?;
+            }
+        }
+        action::Effect::CopyToClipboard { text } => {
+            if clipboard::write_osc52(&text).is_err() {
+                app.toast("Could not write to the terminal", theme::Tone::Danger);
+            }
+        }
+        other => worker.run(other),
+    }
+    Ok(())
+}
+
+/// Leaves raw mode and the alternate screen, runs `task`, then restores both
+/// and forces a full redraw.
+fn suspend<T>(terminal: &mut ratatui::DefaultTerminal, task: impl FnOnce() -> T) -> Result<T> {
+    ratatui::restore();
+    let outcome = task();
+    ratatui::crossterm::terminal::enable_raw_mode()?;
+    ratatui::crossterm::execute!(
+        std::io::stdout(),
+        ratatui::crossterm::terminal::EnterAlternateScreen
+    )?;
+    terminal.clear()?;
+    Ok(outcome)
 }
 
 /// SIGTERM and SIGHUP on Unix, the console window closing on Windows.
