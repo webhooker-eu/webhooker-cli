@@ -2,6 +2,7 @@
 //! the shell through one-line hooks; nothing here sends a request without a
 //! form save or a confirmed modal.
 
+pub mod destination_form;
 pub mod source_form;
 #[cfg(test)]
 pub(crate) mod test_support;
