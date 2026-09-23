@@ -13,3 +13,5 @@ pub mod theme;
 
 #[cfg(test)]
 pub(crate) mod fixtures;
+pub mod hints;
+pub mod keys;

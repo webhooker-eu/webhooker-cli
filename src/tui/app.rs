@@ -675,8 +675,7 @@ fn clamp_cursor(cursor: usize, length: usize) -> usize {
 
 pub fn update(app: &mut App, action: Action) -> Vec<Effect> {
     match action {
-        // Task 11 routes keys to `keys::handle`.
-        Action::Key(_) => Vec::new(),
+        Action::Key(key) => crate::tui::keys::handle(app, key),
         Action::Resize { width, height } => {
             app.size = (width, height);
             Vec::new()
