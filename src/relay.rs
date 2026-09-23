@@ -1,11 +1,16 @@
 //! The relay core shared by `whk listen` and the TUI: parse full webhooks off
 //! a source's live stream, queue them, and forward each to a local URL.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use base64::Engine as _;
 use serde::Deserialize;
+use tokio::sync::{mpsc, watch};
+
+use crate::client::ApiClient;
+use crate::sse::{self, StreamStatus};
 
 /// A frame of the server's live event stream.
 #[derive(Debug, Clone, Deserialize)]
@@ -139,6 +144,116 @@ async fn read_capped(response: &mut reqwest::Response, limit: usize) -> (Vec<u8>
         body.extend_from_slice(&chunk);
     }
     (body, false)
+}
+
+/// Bounds how far the forwarder may fall behind: each request can block for up
+/// to 30s, so an unbounded queue would grow without limit during a burst.
+pub const FORWARD_QUEUE_CAPACITY: usize = 256;
+
+/// What happened to one frame.
+#[derive(Debug, Clone)]
+pub enum RelayOutcome {
+    Forwarded(ForwardedResponse),
+    SkippedUnverified,
+    Failed(String),
+    /// The queue was full; the frame was never sent.
+    Dropped,
+}
+
+#[derive(Debug, Clone)]
+pub struct RelayRecord {
+    pub frame: Arc<WebhookFrame>,
+    /// The target the frame was sent to (or would have been, for drops).
+    pub target_url: String,
+    pub outcome: RelayOutcome,
+}
+
+#[derive(Debug, Clone)]
+pub enum RelayEvent {
+    Record(RelayRecord),
+    MalformedFrame(String),
+}
+
+pub struct RelayOptions {
+    pub source_id: String,
+    pub skip_verify: bool,
+    pub extra_headers: Vec<(String, String)>,
+    pub queue_capacity: usize,
+}
+
+/// Streams a source's full webhooks and forwards each to the URL currently in
+/// `target`. Returns only on a fatal stream error; dropping the future stops
+/// the relay and frees the server's stream slot.
+pub async fn run(
+    client: &ApiClient,
+    options: RelayOptions,
+    target: watch::Receiver<String>,
+    events: mpsc::UnboundedSender<RelayEvent>,
+    on_status: impl FnMut(StreamStatus),
+) -> Result<()> {
+    let RelayOptions {
+        source_id,
+        skip_verify,
+        extra_headers,
+        queue_capacity,
+    } = options;
+    let (queue, mut queued) = mpsc::channel::<Arc<WebhookFrame>>(queue_capacity);
+
+    let forward_task = tokio::spawn({
+        let events = events.clone();
+        let target = target.clone();
+        async move {
+            let http = reqwest::Client::new();
+            while let Some(frame) = queued.recv().await {
+                let target_url = target.borrow().clone();
+                let outcome = if frame.verification_status == "failed" && !skip_verify {
+                    RelayOutcome::SkippedUnverified
+                } else {
+                    match forward(&http, &target_url, &frame, &extra_headers).await {
+                        Ok(response) => RelayOutcome::Forwarded(response),
+                        Err(error) => RelayOutcome::Failed(error.to_string()),
+                    }
+                };
+                let _ = events.send(RelayEvent::Record(RelayRecord {
+                    frame,
+                    target_url,
+                    outcome,
+                }));
+            }
+        }
+    });
+
+    let path = format!("/api/v1/sources/{source_id}/stream");
+    let result = sse::run_stream(
+        client,
+        &path,
+        |event| {
+            if event.event != "webhook" {
+                return;
+            }
+            match serde_json::from_str::<WebhookFrame>(&event.data) {
+                Ok(frame) => {
+                    if let Err(mpsc::error::TrySendError::Full(frame)) =
+                        queue.try_send(Arc::new(frame))
+                    {
+                        let _ = events.send(RelayEvent::Record(RelayRecord {
+                            frame,
+                            target_url: target.borrow().clone(),
+                            outcome: RelayOutcome::Dropped,
+                        }));
+                    }
+                }
+                Err(error) => {
+                    let _ = events.send(RelayEvent::MalformedFrame(error.to_string()));
+                }
+            }
+        },
+        on_status,
+    )
+    .await;
+    drop(queue);
+    let _ = forward_task.await;
+    result
 }
 
 #[cfg(test)]
@@ -288,5 +403,194 @@ pub(crate) mod tests {
             .await
             .unwrap_err();
         assert!(!error.to_string().is_empty());
+    }
+
+    fn frame_json(public_id: &str) -> String {
+        serde_json::json!({
+            "id": "0198c9f0-0000-7000-8000-0000000000ff",
+            "public_id": public_id,
+            "source_id": "src",
+            "method": "POST",
+            "headers": {"content-type": "application/json"},
+            "body": "{}",
+            "content_type": "application/json",
+            "verification_status": "verified",
+            "received_at": "2026-07-16T12:04:31Z"
+        })
+        .to_string()
+    }
+
+    async fn stream_server(public_ids: &[&str]) -> MockServer {
+        let server = MockServer::start().await;
+        let body: String = public_ids
+            .iter()
+            .map(|public_id| format!("event: webhook\ndata: {}\n\n", frame_json(public_id)))
+            .collect();
+        Mock::given(method("GET"))
+            .and(path("/api/v1/sources/src/stream"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(body),
+            )
+            .mount(&server)
+            .await;
+        server
+    }
+
+    fn options(queue_capacity: usize) -> RelayOptions {
+        RelayOptions {
+            source_id: "src".into(),
+            skip_verify: false,
+            extra_headers: vec![],
+            queue_capacity,
+        }
+    }
+
+    /// Runs the relay until `count` records arrived or five seconds passed.
+    async fn collect_records(
+        api: &MockServer,
+        relay_options: RelayOptions,
+        target: watch::Receiver<String>,
+        count: usize,
+        mut on_record: impl FnMut(&RelayRecord),
+    ) -> Vec<RelayRecord> {
+        let client = ApiClient::new(api.uri(), "whk_testkey".to_string()).unwrap();
+        let (events, mut received) = mpsc::unbounded_channel();
+        let relay = run(&client, relay_options, target, events, |_| {});
+        tokio::pin!(relay);
+        let mut records = Vec::new();
+        let deadline = tokio::time::sleep(Duration::from_secs(5));
+        tokio::pin!(deadline);
+        while records.len() < count {
+            tokio::select! {
+                result = &mut relay => panic!("relay ended early: {result:?}"),
+                _ = &mut deadline => panic!("timed out with {} records", records.len()),
+                Some(event) = received.recv() => {
+                    if let RelayEvent::Record(record) = event {
+                        on_record(&record);
+                        records.push(record);
+                    }
+                }
+            }
+        }
+        records
+    }
+
+    #[tokio::test]
+    async fn run_forwards_frames_and_records_the_response() {
+        let api = stream_server(&["evt_one"]).await;
+        let local = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(201).set_body_string("ok"))
+            .mount(&local)
+            .await;
+        let (_retarget, target) = watch::channel(local.uri());
+
+        let records = collect_records(&api, options(8), target, 1, |_| {}).await;
+        assert_eq!(records[0].frame.public_id, "evt_one");
+        assert_eq!(records[0].target_url, local.uri());
+        let RelayOutcome::Forwarded(response) = &records[0].outcome else {
+            panic!("expected a forwarded record, got {:?}", records[0].outcome);
+        };
+        assert_eq!(response.status, 201);
+        assert_eq!(response.body, b"ok".to_vec());
+    }
+
+    #[tokio::test]
+    async fn connection_errors_become_failed_records() {
+        let api = stream_server(&["evt_one"]).await;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let closed_url = format!("http://{}/", listener.local_addr().unwrap());
+        drop(listener);
+        let (_retarget, target) = watch::channel(closed_url);
+
+        let records = collect_records(&api, options(8), target, 1, |_| {}).await;
+        assert!(matches!(records[0].outcome, RelayOutcome::Failed(_)));
+    }
+
+    #[tokio::test]
+    async fn retargeting_applies_to_the_next_frame_without_reconnecting() {
+        let api = stream_server(&["evt_one", "evt_two"]).await;
+        let first = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_millis(500)))
+            .mount(&first)
+            .await;
+        let second = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&second)
+            .await;
+        let (retarget, target) = watch::channel(first.uri());
+
+        // Retarget as soon as the first local server has the first request in
+        // flight: the second frame is still queued and must go to `second`.
+        let retarget_task = tokio::spawn({
+            let second_uri = second.uri();
+            async move {
+                while first
+                    .received_requests()
+                    .await
+                    .unwrap_or_default()
+                    .is_empty()
+                {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                retarget.send(second_uri).unwrap();
+                first
+            }
+        });
+
+        let records = collect_records(&api, options(8), target, 2, |_| {}).await;
+        let first = retarget_task.await.unwrap();
+        assert_eq!(records[0].frame.public_id, "evt_one");
+        assert_eq!(records[0].target_url, first.uri());
+        assert_eq!(records[1].frame.public_id, "evt_two");
+        assert_eq!(records[1].target_url, second.uri());
+        let stream_requests = api.received_requests().await.unwrap();
+        assert_eq!(stream_requests.len(), 1, "retarget must not reconnect");
+    }
+
+    #[tokio::test]
+    async fn a_full_queue_produces_dropped_records() {
+        let api = stream_server(&["evt_one", "evt_two", "evt_three"]).await;
+        let local = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(2)))
+            .mount(&local)
+            .await;
+        let (_retarget, target) = watch::channel(local.uri());
+
+        let mut dropped = 0;
+        collect_records(&api, options(1), target, 1, |record| {
+            if matches!(record.outcome, RelayOutcome::Dropped) {
+                dropped += 1;
+            }
+        })
+        .await;
+        assert!(dropped >= 1);
+    }
+
+    #[tokio::test]
+    async fn unverified_frames_are_skipped_unless_asked() {
+        let server = MockServer::start().await;
+        let unverified = frame_json("evt_bad").replace("\"verified\"", "\"failed\"");
+        Mock::given(method("GET"))
+            .and(path("/api/v1/sources/src/stream"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(format!("event: webhook\ndata: {unverified}\n\n")),
+            )
+            .mount(&server)
+            .await;
+        let (_retarget, target) = watch::channel("http://127.0.0.1:1/".to_string());
+
+        let records = collect_records(&server, options(8), target, 1, |_| {}).await;
+        assert!(matches!(
+            records[0].outcome,
+            RelayOutcome::SkippedUnverified
+        ));
     }
 }

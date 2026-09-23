@@ -1,7 +1,11 @@
 use anyhow::Result;
+use tokio::sync::{mpsc, watch};
 
 use crate::client::ApiClient;
-use crate::relay::{body_bytes, forward, parse_header_flag, WebhookFrame};
+use crate::relay::{
+    self, body_bytes, parse_header_flag, ForwardedResponse, RelayEvent, RelayOptions, RelayOutcome,
+    RelayRecord, WebhookFrame, FORWARD_QUEUE_CAPACITY,
+};
 use crate::sse;
 
 fn body_size_label(frame: &WebhookFrame) -> String {
@@ -11,18 +15,12 @@ fn body_size_label(frame: &WebhookFrame) -> String {
     format!("{:.1} KB", length as f64 / 1024.0)
 }
 
-/// What happened to one frame, for reporting.
-enum FrameOutcome {
-    Forwarded { status: u16, latency_ms: u64 },
-    SkippedUnverified,
-    Failed(String),
-}
-
-fn json_line(frame: &WebhookFrame, outcome: &FrameOutcome) -> String {
+fn json_line(frame: &WebhookFrame, outcome: &RelayOutcome) -> String {
     let label = match outcome {
-        FrameOutcome::Forwarded { .. } => "forwarded",
-        FrameOutcome::SkippedUnverified => "skipped",
-        FrameOutcome::Failed(_) => "error",
+        RelayOutcome::Forwarded(_) => "forwarded",
+        RelayOutcome::SkippedUnverified => "skipped",
+        RelayOutcome::Failed(_) => "error",
+        RelayOutcome::Dropped => "dropped",
     };
     let mut record = serde_json::json!({
         "event": frame.public_id,
@@ -30,50 +28,68 @@ fn json_line(frame: &WebhookFrame, outcome: &FrameOutcome) -> String {
         "outcome": label,
     });
     match outcome {
-        FrameOutcome::Forwarded { status, latency_ms } => {
-            record["status"] = (*status).into();
-            record["latency_ms"] = (*latency_ms).into();
+        RelayOutcome::Forwarded(response) => {
+            record["status"] = response.status.into();
+            record["latency_ms"] = (response.elapsed.as_millis() as u64).into();
         }
-        FrameOutcome::SkippedUnverified => {
+        RelayOutcome::SkippedUnverified => {
             record["reason"] = "signature verification failed".into();
         }
-        FrameOutcome::Failed(error) => record["error"] = error.as_str().into(),
+        RelayOutcome::Failed(error) => record["error"] = error.as_str().into(),
+        RelayOutcome::Dropped => record["reason"] = "forward queue full".into(),
     }
     record.to_string()
 }
 
+fn forwarded_line(frame: &WebhookFrame, response: &ForwardedResponse) -> String {
+    format!(
+        "  {} {} ← {} ({}, {})\n           → {} in {}ms",
+        frame.received_at,
+        frame.method,
+        frame.public_id,
+        frame.content_type.as_deref().unwrap_or("-"),
+        body_size_label(frame),
+        response.status,
+        response.elapsed.as_millis() as u64
+    )
+}
+
 /// Machine-readable records go to stdout; human progress and failures are
 /// diagnostics and go to stderr, so `whk listen --json | jq` stays clean.
-fn report(frame: &WebhookFrame, outcome: &FrameOutcome, json_output: bool) {
+/// Drops and malformed frames were always diagnostics, in both modes.
+fn report(event: &RelayEvent, json_output: bool) {
+    let record = match event {
+        RelayEvent::MalformedFrame(error) => {
+            eprintln!("  malformed frame skipped: {error}");
+            return;
+        }
+        RelayEvent::Record(record) => record,
+    };
+    let RelayRecord { frame, outcome, .. } = record;
+    if let RelayOutcome::Dropped = outcome {
+        eprintln!(
+            "  {} dropped ← {} ({FORWARD_QUEUE_CAPACITY} webhooks already queued; the local endpoint is too slow)",
+            frame.received_at, frame.public_id
+        );
+        return;
+    }
     if json_output {
         println!("{}", json_line(frame, outcome));
         return;
     }
     match outcome {
-        FrameOutcome::Forwarded { status, latency_ms } => println!(
-            "  {} {} ← {} ({}, {})\n           → {} in {}ms",
-            frame.received_at,
-            frame.method,
-            frame.public_id,
-            frame.content_type.as_deref().unwrap_or("-"),
-            body_size_label(frame),
-            status,
-            latency_ms
-        ),
-        FrameOutcome::SkippedUnverified => eprintln!(
+        RelayOutcome::Forwarded(response) => println!("{}", forwarded_line(frame, response)),
+        RelayOutcome::SkippedUnverified => eprintln!(
             "  {} skipped ← {} (signature invalid; use --skip-verify)",
             frame.received_at, frame.public_id
         ),
-        FrameOutcome::Failed(error) => eprintln!(
+        RelayOutcome::Failed(error) => eprintln!(
             "  {} ← {} forward failed: {error}",
             frame.received_at, frame.public_id
         ),
+        RelayOutcome::Dropped => {}
     }
 }
-
-/// Bounds how far the forwarder may fall behind: each request can block for up
-/// to 30s, so an unbounded queue would grow without limit during a burst.
-const FORWARD_QUEUE_CAPACITY: usize = 256;
 
 pub async fn run(
     client: &ApiClient,
@@ -83,7 +99,7 @@ pub async fn run(
     raw_headers: &[String],
     json_output: bool,
 ) -> Result<()> {
-    let extra: Vec<(String, String)> = raw_headers
+    let extra_headers: Vec<(String, String)> = raw_headers
         .iter()
         .map(|raw| parse_header_flag(raw))
         .collect::<Result<_>>()?;
@@ -93,52 +109,21 @@ pub async fn run(
         source.name
     );
 
-    let http = reqwest::Client::new();
-    let (sender, mut receiver) = tokio::sync::mpsc::channel::<WebhookFrame>(FORWARD_QUEUE_CAPACITY);
-
-    let path = format!("/api/v1/sources/{}/stream", source.id);
-    let forward_task = tokio::spawn({
-        let http = http.clone();
-        let forward_url = forward_url.to_string();
-        async move {
-            while let Some(frame) = receiver.recv().await {
-                if frame.verification_status == "failed" && !skip_verify {
-                    report(&frame, &FrameOutcome::SkippedUnverified, json_output);
-                    continue;
-                }
-                let outcome = match forward(&http, &forward_url, &frame, &extra).await {
-                    Ok(response) => FrameOutcome::Forwarded {
-                        status: response.status,
-                        latency_ms: response.elapsed.as_millis() as u64,
-                    },
-                    Err(error) => FrameOutcome::Failed(error.to_string()),
-                };
-                report(&frame, &outcome, json_output);
-            }
+    let (_retarget, target) = watch::channel(forward_url.to_string());
+    let (events, mut received) = mpsc::unbounded_channel();
+    let printer = tokio::spawn(async move {
+        while let Some(event) = received.recv().await {
+            report(&event, json_output);
         }
     });
-
-    let result = sse::run_stream(client, &path, |event| {
-        if event.event != "webhook" {
-            return;
-        }
-        match serde_json::from_str::<WebhookFrame>(&event.data) {
-            Ok(frame) => {
-                if let Err(tokio::sync::mpsc::error::TrySendError::Full(frame)) =
-                    sender.try_send(frame)
-                {
-                    eprintln!(
-                        "  {} dropped ← {} ({FORWARD_QUEUE_CAPACITY} webhooks already queued; the local endpoint is too slow)",
-                        frame.received_at, frame.public_id
-                    );
-                }
-            }
-            Err(error) => eprintln!("  malformed frame skipped: {error}"),
-        }
-    }, sse::print_status)
-    .await;
-    drop(sender);
-    let _ = forward_task.await;
+    let options = RelayOptions {
+        source_id: source.id,
+        skip_verify,
+        extra_headers,
+        queue_capacity: FORWARD_QUEUE_CAPACITY,
+    };
+    let result = relay::run(client, options, target, events, sse::print_status).await;
+    let _ = printer.await;
     result
 }
 
@@ -147,6 +132,17 @@ mod tests {
     use super::*;
     use crate::relay::tests::frame;
     use base64::Engine as _;
+    use std::time::Duration;
+
+    fn forwarded(status: u16, latency_ms: u64) -> RelayOutcome {
+        RelayOutcome::Forwarded(ForwardedResponse {
+            status,
+            headers: vec![],
+            body: vec![],
+            body_truncated: false,
+            elapsed: Duration::from_millis(latency_ms),
+        })
+    }
 
     #[test]
     fn reported_size_uses_the_decoded_body_not_the_lossy_string() {
@@ -160,12 +156,9 @@ mod tests {
     fn json_records_stay_parsable_on_every_outcome() {
         let frame = frame("{}");
         let outcomes = [
-            FrameOutcome::Forwarded {
-                status: 200,
-                latency_ms: 12,
-            },
-            FrameOutcome::SkippedUnverified,
-            FrameOutcome::Failed("connection refused".to_string()),
+            forwarded(200, 12),
+            RelayOutcome::SkippedUnverified,
+            RelayOutcome::Failed("connection refused".to_string()),
         ];
         let labels = ["forwarded", "skipped", "error"];
         for (outcome, label) in outcomes.iter().zip(labels) {
@@ -175,12 +168,23 @@ mod tests {
             assert_eq!(record["event"], "evt_testtesttest01");
             assert_eq!(record["method"], "POST");
         }
-        let forwarded: serde_json::Value =
+        let forwarded_record: serde_json::Value =
             serde_json::from_str(&json_line(&frame, &outcomes[0])).unwrap();
-        assert_eq!(forwarded["status"], 200);
-        assert_eq!(forwarded["latency_ms"], 12);
+        assert_eq!(forwarded_record["status"], 200);
+        assert_eq!(forwarded_record["latency_ms"], 12);
         let failed: serde_json::Value =
             serde_json::from_str(&json_line(&frame, &outcomes[2])).unwrap();
         assert_eq!(failed["error"], "connection refused");
+    }
+
+    #[test]
+    fn forwarded_text_line_is_unchanged() {
+        let RelayOutcome::Forwarded(response) = forwarded(200, 12) else {
+            unreachable!()
+        };
+        assert_eq!(
+            forwarded_line(&frame("{}"), &response),
+            "  2026-07-16T12:04:31Z POST ← evt_testtesttest01 (application/json, 0.0 KB)\n           → 200 in 12ms"
+        );
     }
 }
