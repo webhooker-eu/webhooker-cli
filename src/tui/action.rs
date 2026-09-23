@@ -146,12 +146,61 @@ pub enum Mutation {
         since: Option<String>,
         until: Option<String>,
     },
+    /// `follow_up` is PATCHed onto the new source: the create endpoint
+    /// ignores `description` and `response_config`.
+    CreateSource {
+        body: serde_json::Value,
+        follow_up: Option<serde_json::Value>,
+    },
+    UpdateSource {
+        id: String,
+        body: serde_json::Value,
+    },
+    DeleteSource {
+        id: String,
+    },
+    RotateSourceToken {
+        id: String,
+    },
+    CreateDestination {
+        body: serde_json::Value,
+    },
+    UpdateDestination {
+        id: String,
+        body: serde_json::Value,
+    },
+    DeleteDestination {
+        id: String,
+    },
+    /// `follow_up` carries `{"enabled": false}`: the create endpoint has no
+    /// `enabled` field.
+    CreateConnection {
+        body: serde_json::Value,
+        follow_up: Option<serde_json::Value>,
+    },
+    UpdateConnection {
+        id: String,
+        body: serde_json::Value,
+    },
+    DeleteConnection {
+        id: String,
+    },
 }
 
 impl Mutation {
     pub fn method(&self) -> reqwest::Method {
         match self {
             Mutation::ReplayEvent { .. } | Mutation::ResendBulk { .. } => reqwest::Method::POST,
+            Mutation::CreateSource { .. }
+            | Mutation::RotateSourceToken { .. }
+            | Mutation::CreateDestination { .. }
+            | Mutation::CreateConnection { .. } => reqwest::Method::POST,
+            Mutation::UpdateSource { .. }
+            | Mutation::UpdateDestination { .. }
+            | Mutation::UpdateConnection { .. } => reqwest::Method::PATCH,
+            Mutation::DeleteSource { .. }
+            | Mutation::DeleteDestination { .. }
+            | Mutation::DeleteConnection { .. } => reqwest::Method::DELETE,
         }
     }
 
@@ -159,6 +208,19 @@ impl Mutation {
         match self {
             Mutation::ReplayEvent { event_id, .. } => format!("/api/v1/events/{event_id}/resend"),
             Mutation::ResendBulk { .. } => "/api/v1/deliveries/resend-bulk".to_string(),
+            Mutation::CreateSource { .. } => "/api/v1/sources/".to_string(),
+            Mutation::UpdateSource { id, .. } | Mutation::DeleteSource { id } => {
+                format!("/api/v1/sources/{id}")
+            }
+            Mutation::RotateSourceToken { id } => format!("/api/v1/sources/{id}/rotate-token"),
+            Mutation::CreateDestination { .. } => "/api/v1/destinations/".to_string(),
+            Mutation::UpdateDestination { id, .. } | Mutation::DeleteDestination { id } => {
+                format!("/api/v1/destinations/{id}")
+            }
+            Mutation::CreateConnection { .. } => "/api/v1/connections/".to_string(),
+            Mutation::UpdateConnection { id, .. } | Mutation::DeleteConnection { id } => {
+                format!("/api/v1/connections/{id}")
+            }
         }
     }
 
@@ -186,6 +248,16 @@ impl Mutation {
                 }
                 Some(body)
             }
+            Mutation::CreateSource { body, .. }
+            | Mutation::UpdateSource { body, .. }
+            | Mutation::CreateDestination { body }
+            | Mutation::UpdateDestination { body, .. }
+            | Mutation::CreateConnection { body, .. }
+            | Mutation::UpdateConnection { body, .. } => Some(body.clone()),
+            Mutation::RotateSourceToken { .. } => Some(serde_json::json!({})),
+            Mutation::DeleteSource { .. }
+            | Mutation::DeleteDestination { .. }
+            | Mutation::DeleteConnection { .. } => None,
         }
     }
 
@@ -196,6 +268,18 @@ impl Mutation {
                 id: event_id.clone(),
             }],
             Mutation::ResendBulk { .. } => Vec::new(),
+            Mutation::UpdateSource { id, .. }
+            | Mutation::DeleteSource { id }
+            | Mutation::RotateSourceToken { id } => vec![Request::Source { id: id.clone() }],
+            Mutation::UpdateDestination { id, .. } | Mutation::DeleteDestination { id } => {
+                vec![Request::Destination { id: id.clone() }]
+            }
+            Mutation::UpdateConnection { id, .. } | Mutation::DeleteConnection { id } => {
+                vec![Request::Connection { id: id.clone() }]
+            }
+            Mutation::CreateSource { .. } => Vec::new(),
+            Mutation::CreateDestination { .. } => vec![Request::Destinations],
+            Mutation::CreateConnection { .. } => vec![Request::Connections],
         }
     }
 }
@@ -408,5 +492,105 @@ mod tests {
             }))
         );
         assert!(bulk.affected().is_empty());
+    }
+
+    #[test]
+    fn crud_mutations_map_to_the_api() {
+        use serde_json::json;
+        let body = json!({"name": "stripe"});
+        let cases = [
+            (
+                Mutation::CreateSource {
+                    body: body.clone(),
+                    follow_up: None,
+                },
+                "POST",
+                "/api/v1/sources/",
+                Some(body.clone()),
+            ),
+            (
+                Mutation::UpdateSource {
+                    id: "s1".into(),
+                    body: body.clone(),
+                },
+                "PATCH",
+                "/api/v1/sources/s1",
+                Some(body.clone()),
+            ),
+            (
+                Mutation::DeleteSource { id: "s1".into() },
+                "DELETE",
+                "/api/v1/sources/s1",
+                None,
+            ),
+            (
+                Mutation::RotateSourceToken { id: "s1".into() },
+                "POST",
+                "/api/v1/sources/s1/rotate-token",
+                Some(json!({})),
+            ),
+            (
+                Mutation::CreateDestination { body: body.clone() },
+                "POST",
+                "/api/v1/destinations/",
+                Some(body.clone()),
+            ),
+            (
+                Mutation::UpdateDestination {
+                    id: "d1".into(),
+                    body: body.clone(),
+                },
+                "PATCH",
+                "/api/v1/destinations/d1",
+                Some(body.clone()),
+            ),
+            (
+                Mutation::DeleteDestination { id: "d1".into() },
+                "DELETE",
+                "/api/v1/destinations/d1",
+                None,
+            ),
+            (
+                Mutation::CreateConnection {
+                    body: body.clone(),
+                    follow_up: None,
+                },
+                "POST",
+                "/api/v1/connections/",
+                Some(body.clone()),
+            ),
+            (
+                Mutation::UpdateConnection {
+                    id: "c1".into(),
+                    body: body.clone(),
+                },
+                "PATCH",
+                "/api/v1/connections/c1",
+                Some(body.clone()),
+            ),
+            (
+                Mutation::DeleteConnection { id: "c1".into() },
+                "DELETE",
+                "/api/v1/connections/c1",
+                None,
+            ),
+        ];
+        for (mutation, method, path, expected_body) in cases {
+            assert_eq!(mutation.method().as_str(), method, "{mutation:?}");
+            assert_eq!(mutation.path(), path, "{mutation:?}");
+            assert_eq!(mutation.body(), expected_body, "{mutation:?}");
+        }
+        assert_eq!(
+            Mutation::DeleteSource { id: "s1".into() }.affected(),
+            vec![Request::Source { id: "s1".into() }]
+        );
+        assert_eq!(
+            Mutation::CreateConnection {
+                body,
+                follow_up: None
+            }
+            .affected(),
+            vec![Request::Connections]
+        );
     }
 }

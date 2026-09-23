@@ -1000,6 +1000,17 @@ fn mutation_succeeded(app: &mut App, mutation: &Mutation, value: &Value) -> Vec<
             }
             Vec::new()
         }
+        // Handled by `crud::on_mutated`, hooked at the top of `on_mutated`.
+        Mutation::CreateSource { .. }
+        | Mutation::UpdateSource { .. }
+        | Mutation::DeleteSource { .. }
+        | Mutation::RotateSourceToken { .. }
+        | Mutation::CreateDestination { .. }
+        | Mutation::UpdateDestination { .. }
+        | Mutation::DeleteDestination { .. }
+        | Mutation::CreateConnection { .. }
+        | Mutation::UpdateConnection { .. }
+        | Mutation::DeleteConnection { .. } => Vec::new(),
     }
 }
 
