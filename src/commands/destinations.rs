@@ -3,8 +3,8 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
 use crate::client::ApiClient;
-use crate::listen::parse_header_flag;
 use crate::output;
+use crate::relay::parse_header_flag;
 
 /// Outbound auth methods whose only input is a secret, so the CLI can accept
 /// `--auth hmac` and read the secret off a prompt instead of argv.
