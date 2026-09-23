@@ -7,10 +7,12 @@ use std::time::Duration;
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 
 use crate::args::query_string;
+use crate::tui::action::Request;
 use crate::tui::app::App;
 use crate::tui::forms::input::TextInput;
 use crate::tui::model::{DlqEntry, DlqSummary, TailNotice};
 use crate::tui::names::NameCache;
+use crate::tui::poller::{list_interval, PlanTier};
 use crate::tui::screen::{Screen, SourceTab};
 
 pub const EVENTS_PAGE_SIZE: i64 = 50;
@@ -494,6 +496,158 @@ impl App {
     }
 }
 
+fn interval(tier: PlanTier, free_seconds: u64, paid_seconds: u64) -> Duration {
+    Duration::from_secs(match tier {
+        PlanTier::Free => free_seconds,
+        PlanTier::Paid => paid_seconds,
+    })
+}
+
+fn events_request(filter: EventFilter, page: i64, tier: PlanTier) -> (Request, Duration) {
+    let every = if filter.source_id.is_some() {
+        interval(tier, 60, 15)
+    } else {
+        interval(tier, 30, 10)
+    };
+    (Request::Events { filter, page }, every)
+}
+
+fn dlq_requests(app: &App, source_id: &str) -> Vec<(Request, Duration)> {
+    let dlq = &app.event_screens.dlq;
+    let every = Duration::from_secs(60);
+    vec![
+        (
+            Request::DlqSummary {
+                source_id: source_id.to_string(),
+            },
+            every,
+        ),
+        (
+            Request::DlqEntries {
+                source_id: source_id.to_string(),
+                statuses: dlq.statuses.clone(),
+                window: dlq.window,
+            },
+            every,
+        ),
+    ]
+}
+
+/// Requests of the event screens; `poller::schedule` covers the others.
+pub fn schedule(app: &App) -> Vec<(Request, Duration)> {
+    let tier = app.tier();
+    let names = (Request::Sources { search: None }, list_interval(tier));
+    match &app.screen {
+        Screen::Events => {
+            let state = &app.event_screens.global;
+            vec![
+                events_request(state.filter.clone(), state.page, tier),
+                names,
+            ]
+        }
+        Screen::SourceDetail {
+            tab: SourceTab::Events,
+            ..
+        } => app
+            .visible_events_filter()
+            .map(|filter| vec![events_request(filter, app.event_screens.source.page, tier)])
+            .unwrap_or_default(),
+        Screen::SourceDetail {
+            id,
+            tab: SourceTab::Dlq,
+        } => dlq_requests(app, id),
+        Screen::Dlq => {
+            let mut requests = vec![names];
+            if let Some(source_id) = app.dlq_source_id() {
+                requests.extend(dlq_requests(app, &source_id));
+            }
+            requests
+        }
+        Screen::Stats => {
+            let range = app.event_screens.stats.range;
+            let every = Duration::from_secs(120);
+            vec![
+                (Request::StatsOverview { range }, every),
+                (Request::SourceVolume { range }, every),
+            ]
+        }
+        Screen::EventDetail { id } => {
+            let loaded = app
+                .data
+                .event
+                .value
+                .as_ref()
+                .filter(|event| event.id == *id);
+            let settled = loaded.is_some_and(|event| !event.has_transitional_deliveries());
+            let every = if settled {
+                SETTLED_EVENT_INTERVAL
+            } else {
+                interval(tier, 5, 2)
+            };
+            let mut requests = vec![(Request::Event { id: id.clone() }, every)];
+            if let Some(event) = loaded {
+                requests.push((
+                    Request::SourceConnections {
+                        source_id: event.source_id.clone(),
+                    },
+                    list_interval(tier),
+                ));
+            }
+            requests
+        }
+        _ => Vec::new(),
+    }
+}
+
+impl App {
+    /// Called by `enter`: resets state that belongs to another resource.
+    pub fn prepare_screen(&mut self) {
+        match self.screen.clone() {
+            Screen::SourceDetail { id, .. } => {
+                if self.event_screens.source_for.as_deref() != Some(id.as_str()) {
+                    self.event_screens.source = EventsState::default();
+                    self.event_screens.source_for = Some(id.clone());
+                }
+                self.event_screens.last_source_id = Some(id);
+            }
+            Screen::EventDetail { id } => {
+                if self.event_screens.detail_for.as_deref() != Some(id.as_str()) {
+                    self.event_screens.detail = EventView::default();
+                    self.event_screens.detail_for = Some(id);
+                }
+            }
+            _ => {}
+        }
+        if let Some(filter) = self.visible_events_filter() {
+            let shown = Some((filter, self.visible_events_page()));
+            if self.event_screens.shown != shown {
+                self.data.events = Default::default();
+                self.event_screens.shown = shown;
+            }
+        }
+        let on_dlq = matches!(
+            self.screen,
+            Screen::Dlq
+                | Screen::SourceDetail {
+                    tab: SourceTab::Dlq,
+                    ..
+                }
+        );
+        if on_dlq {
+            let source = self.dlq_source_id();
+            if self.event_screens.dlq.viewed != source {
+                let dlq = &mut self.event_screens.dlq;
+                dlq.pane = DlqPane::Summary;
+                dlq.summary_cursor = 0;
+                dlq.entries_cursor = 0;
+                dlq.viewed = source;
+                self.data.dlq_summary = Default::default();
+                self.data.dlq_entries = Default::default();
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -632,5 +786,107 @@ mod tests {
             DlqState::default().statuses,
             vec!["exhausted".to_string(), "failed".to_string()]
         );
+    }
+
+    use crate::tui::fixtures;
+
+    fn requests(app: &App) -> Vec<(Request, u64)> {
+        schedule(app)
+            .into_iter()
+            .map(|(request, every)| (request, every.as_secs()))
+            .collect()
+    }
+
+    #[test]
+    fn unfiltered_events_poll_faster_than_filtered_ones() {
+        let mut app = fixtures::app();
+        app.screen = Screen::Events;
+        let unfiltered = requests(&app);
+        assert!(matches!(
+            unfiltered[0],
+            (Request::Events { page: 1, .. }, 10)
+        ));
+        app.event_screens.global.filter.source_id = Some(fixtures::STRIPE_ID.into());
+        assert!(matches!(requests(&app)[0], (Request::Events { .. }, 15)));
+        app.session.workspace.as_mut().unwrap().plan = "free".into();
+        assert!(matches!(requests(&app)[0], (Request::Events { .. }, 60)));
+    }
+
+    #[test]
+    fn the_source_events_tab_forces_its_source() {
+        let mut app = fixtures::source_detail(SourceTab::Events);
+        app.event_screens.source.filter.verification = Some("failed".into());
+        let Request::Events { filter, .. } = &requests(&app)[0].0 else {
+            panic!("expected events");
+        };
+        assert_eq!(filter.source_id.as_deref(), Some(fixtures::STRIPE_ID));
+        assert_eq!(filter.verification.as_deref(), Some("failed"));
+    }
+
+    #[test]
+    fn dlq_and_stats_intervals() {
+        let mut app = fixtures::app();
+        app.screen = Screen::Dlq;
+        let dlq = requests(&app);
+        assert!(dlq.contains(&(
+            Request::DlqSummary {
+                source_id: fixtures::STRIPE_ID.into()
+            },
+            60
+        )));
+        app.screen = Screen::Stats;
+        let stats = requests(&app);
+        assert_eq!(
+            stats,
+            vec![
+                (
+                    Request::StatsOverview {
+                        range: StatsRange::Day
+                    },
+                    120
+                ),
+                (
+                    Request::SourceVolume {
+                        range: StatsRange::Day
+                    },
+                    120
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_dlq_starts_on_the_last_source_opened() {
+        let mut app = fixtures::app();
+        app.screen = Screen::Dlq;
+        assert_eq!(app.dlq_source_id().as_deref(), Some(fixtures::STRIPE_ID));
+        app.event_screens.last_source_id = Some(fixtures::GITHUB_ID.into());
+        assert_eq!(app.dlq_source_id().as_deref(), Some(fixtures::GITHUB_ID));
+        app.event_screens.dlq.source_id = Some(fixtures::SHOPIFY_ID.into());
+        assert_eq!(app.dlq_source_id().as_deref(), Some(fixtures::SHOPIFY_ID));
+    }
+
+    #[test]
+    fn an_event_polls_quickly_until_its_deliveries_settle() {
+        let mut app = fixtures::app();
+        app.screen = Screen::EventDetail {
+            id: fixtures::EVENT_ID.into(),
+        };
+        assert!(matches!(requests(&app)[0], (Request::Event { .. }, 2)));
+        let now = app.now;
+        let mut event = fixtures::event_detail();
+        event.deliveries[0].status = "pending".into();
+        app.data.event.finish(event.clone(), now);
+        let pending = requests(&app);
+        assert!(matches!(pending[0], (Request::Event { .. }, 2)));
+        assert!(pending.contains(&(
+            Request::SourceConnections {
+                source_id: fixtures::STRIPE_ID.into()
+            },
+            20
+        )));
+        event.deliveries[0].status = "succeeded".into();
+        app.data.event.finish(event, now);
+        assert!(matches!(requests(&app)[0], (Request::Event { .. }, 3_600)));
     }
 }

@@ -387,7 +387,9 @@ impl App {
     pub fn in_scrollable_pane(&self) -> bool {
         matches!(
             self.screen,
-            Screen::DestinationDetail { .. } | Screen::ConnectionDetail { .. }
+            Screen::DestinationDetail { .. }
+                | Screen::ConnectionDetail { .. }
+                | Screen::EventDetail { .. }
         )
     }
 
@@ -417,6 +419,7 @@ impl App {
             }
             Screen::DestinationDetail { .. } => self.data.destination = Loadable::default(),
             Screen::ConnectionDetail { .. } => self.data.connection = Loadable::default(),
+            Screen::EventDetail { .. } => self.data.event = Loadable::default(),
             _ => {}
         }
         let previous = std::mem::replace(&mut self.screen, screen);
@@ -454,6 +457,7 @@ impl App {
         self.generation += 1;
         self.scroll = 0;
         self.pending_jump = false;
+        self.prepare_screen();
         if self.screen == Screen::Settings && self.settings_form.is_none() {
             self.settings_form = Some(SettingsForm::new(&self.settings));
         }
@@ -481,11 +485,23 @@ impl App {
                 tab: SourceTab::Connections,
                 ..
             } => &self.data.source_connections,
+            Screen::SourceDetail {
+                tab: SourceTab::Events,
+                ..
+            } => &self.data.events,
+            Screen::SourceDetail {
+                tab: SourceTab::Dlq,
+                ..
+            } => &self.data.dlq_summary,
             Screen::SourceDetail { .. } => &self.data.source,
             Screen::Destinations => &self.data.destinations,
             Screen::DestinationDetail { .. } => &self.data.destination,
             Screen::Connections => &self.data.connections,
             Screen::ConnectionDetail { .. } => &self.data.connection,
+            Screen::Events => &self.data.events,
+            Screen::EventDetail { .. } => &self.data.event,
+            Screen::Dlq => &self.data.dlq_summary,
+            Screen::Stats => &self.data.stats_overview,
             _ => return None,
         };
         Some(slot.status())
@@ -506,7 +522,10 @@ impl App {
     }
 
     fn schedule(&self) -> Vec<(Request, Duration)> {
-        poller::schedule(&self.screen, self.source_query.as_deref(), self.tier())
+        let mut schedule =
+            poller::schedule(&self.screen, self.source_query.as_deref(), self.tier());
+        schedule.extend(crate::tui::events_state::schedule(self));
+        schedule
     }
 
     fn fetch(&mut self, request: Request, generation: u64, priority: Priority) -> Effect {
@@ -561,7 +580,8 @@ impl App {
                 Screen::SourceDetail { id: open, .. },
             )
             | (Request::Destination { id }, Screen::DestinationDetail { id: open })
-            | (Request::Connection { id }, Screen::ConnectionDetail { id: open }) => id == open,
+            | (Request::Connection { id }, Screen::ConnectionDetail { id: open })
+            | (Request::Event { id }, Screen::EventDetail { id: open }) => id == open,
             _ => false,
         }
     }
@@ -1247,5 +1267,75 @@ mod tests {
         let mut app = fixtures::app();
         update(&mut app, Action::Terminate);
         assert!(app.quit);
+    }
+
+    #[test]
+    fn opening_an_event_clears_the_previous_one_and_resets_its_view() {
+        let mut app = fixtures::app();
+        let now = app.now;
+        app.data.event.finish(fixtures::event_detail(), now);
+        app.event_screens.detail.wrap = true;
+        let effects = app.open(Screen::EventDetail {
+            id: "other-event".into(),
+        });
+        assert!(app.data.event.value.is_none());
+        assert!(!app.event_screens.detail.wrap);
+        assert_eq!(
+            fetched_requests(&effects)[0],
+            Request::Event {
+                id: "other-event".into()
+            }
+        );
+        assert!(app.in_scrollable_pane());
+    }
+
+    #[test]
+    fn a_404_on_the_open_event_goes_back() {
+        let mut app = fixtures::app();
+        app.switch_to(Section::Events);
+        app.open(Screen::EventDetail {
+            id: fixtures::EVENT_ID.into(),
+        });
+        let generation = app.generation;
+        update(
+            &mut app,
+            Action::Fetched {
+                request: Request::Event {
+                    id: fixtures::EVENT_ID.into(),
+                },
+                generation,
+                result: Err(failure(404)),
+            },
+        );
+        assert_eq!(app.screen, Screen::Events);
+    }
+
+    #[test]
+    fn switching_sources_resets_the_tab_state_and_remembers_the_source() {
+        let mut app = fixtures::source_detail(SourceTab::Events);
+        app.enter();
+        app.event_screens.source.page = 3;
+        app.back();
+        app.open(Screen::SourceDetail {
+            id: fixtures::GITHUB_ID.into(),
+            tab: SourceTab::Events,
+        });
+        assert_eq!(app.event_screens.source.page, 1);
+        assert_eq!(
+            app.event_screens.last_source_id.as_deref(),
+            Some(fixtures::GITHUB_ID)
+        );
+    }
+
+    #[test]
+    fn event_screens_report_their_data_age() {
+        let mut app = fixtures::app();
+        app.screen = Screen::Stats;
+        assert_eq!(app.primary_status(), Some((None, false)));
+        app.screen = Screen::SourceDetail {
+            id: fixtures::STRIPE_ID.into(),
+            tab: SourceTab::Dlq,
+        };
+        assert_eq!(app.primary_status(), Some((None, false)));
     }
 }

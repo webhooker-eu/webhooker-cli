@@ -70,7 +70,8 @@ pub fn schedule(
         | Screen::Events
         | Screen::Dlq
         | Screen::Stats
-        | Screen::Relay => Vec::new(),
+        | Screen::Relay
+        | Screen::EventDetail { .. } => Vec::new(),
     };
     requests
         .into_iter()

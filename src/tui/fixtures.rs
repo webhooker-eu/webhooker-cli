@@ -255,3 +255,75 @@ pub fn connection_detail() -> App {
     );
     app
 }
+
+pub const EVENT_ID: &str = "0198c9f0-0000-7000-8000-0000000000e1";
+
+pub fn event_detail() -> crate::tui::model::EventDetail {
+    serde_json::from_value(json!({
+        "id": EVENT_ID,
+        "public_id": "evt_8f2a1b",
+        "source_id": STRIPE_ID,
+        "method": "POST",
+        "headers": {
+            "content-type": "application/json",
+            "stripe-signature": "t=1726000000,v1=5257a869",
+            "user-agent": "Stripe/1.0"
+        },
+        "body": "{\"type\":\"invoice.paid\",\"amount\":1200,\"paid\":true,\"note\":null}",
+        "body_size": 62,
+        "content_type": "application/json",
+        "verification_status": "verified",
+        "received_at": "2026-09-23T12:04:11Z",
+        "expires_at": "2026-10-23T12:04:11Z",
+        "deliveries": [
+            {
+                "id": "0198c9f0-0000-7000-8000-0000000000f1",
+                "connection_id": STRIPE_BILLING_ID,
+                "destination_name": "billing-worker",
+                "status": "succeeded",
+                "attempt_count": 1,
+                "next_attempt_at": "2026-09-23T12:04:11Z",
+                "created_at": "2026-09-23T12:04:11Z",
+                "attempts": [{
+                    "attempt_number": 1,
+                    "request_url": "https://billing.internal/hooks",
+                    "response_status": 200,
+                    "response_body": "ok",
+                    "error_message": null,
+                    "latency_ms": 34,
+                    "attempted_at": "2026-09-23T12:04:12Z"
+                }]
+            },
+            {
+                "id": "0198c9f0-0000-7000-8000-0000000000f2",
+                "connection_id": STRIPE_AUDIT_ID,
+                "destination_name": "audit-log",
+                "status": "exhausted",
+                "attempt_count": 2,
+                "next_attempt_at": "2026-09-23T12:10:00Z",
+                "created_at": "2026-09-23T12:04:11Z",
+                "attempts": [
+                    {
+                        "attempt_number": 1,
+                        "request_url": "https://audit.example.com/in",
+                        "response_status": 500,
+                        "response_body": "{\"error\":\"db timeout\"}",
+                        "error_message": "HTTP 500",
+                        "latency_ms": 120,
+                        "attempted_at": "2026-09-23T12:04:12Z"
+                    },
+                    {
+                        "attempt_number": 2,
+                        "request_url": "https://audit.example.com/in",
+                        "response_status": null,
+                        "response_body": null,
+                        "error_message": "connection refused",
+                        "latency_ms": 3,
+                        "attempted_at": "2026-09-23T12:06:12Z"
+                    }
+                ]
+            }
+        ]
+    }))
+    .unwrap()
+}

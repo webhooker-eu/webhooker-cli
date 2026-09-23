@@ -70,7 +70,11 @@ pub fn hints(app: &App) -> Vec<Hint> {
             ("ctrl+s", "save"),
             ("esc", "back"),
         ],
-        Screen::Events | Screen::Dlq | Screen::Stats | Screen::Relay => {
+        Screen::Events
+        | Screen::Dlq
+        | Screen::Stats
+        | Screen::Relay
+        | Screen::EventDetail { .. } => {
             vec![("g", "jump"), ("?", "help"), ("q", "quit")]
         }
     }

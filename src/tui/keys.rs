@@ -168,9 +168,12 @@ fn on_main_key(app: &mut App, code: KeyCode) -> Vec<Effect> {
         Screen::DestinationDetail { .. } | Screen::ConnectionDetail { .. } => {
             on_text_pane_key(app, code)
         }
-        Screen::Events | Screen::Dlq | Screen::Stats | Screen::Relay | Screen::Settings => {
-            to_sidebar(app, code)
-        }
+        Screen::Events
+        | Screen::Dlq
+        | Screen::Stats
+        | Screen::Relay
+        | Screen::Settings
+        | Screen::EventDetail { .. } => to_sidebar(app, code),
         Screen::Login => Vec::new(),
     }
 }
