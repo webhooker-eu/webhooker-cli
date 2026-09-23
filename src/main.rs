@@ -593,13 +593,15 @@ async fn login(server: Option<String>, api_key: Option<String>) -> Result<()> {
     };
     let client = client::ApiClient::new(server.clone(), key.clone())?;
     let me = client.me().await?; // validates the key
-    config::save(
-        &path,
-        &config::Config {
-            server: server.clone(),
-            api_key: key,
-        },
-    )?;
+    let saved = config::update(&path, |config| {
+        config.server = server.clone();
+        config.api_key = key.clone();
+    });
+    if saved.is_err() {
+        // An unreadable config is overwritten, as before: it holds nothing
+        // this login could preserve.
+        config::save(&path, &config::Config::new(server.clone(), key))?;
+    }
     println!(
         "Logged in to {server} (workspace \"{}\", {} plan). Saved to {}",
         me.workspace.name,
