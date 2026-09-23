@@ -449,3 +449,92 @@ pub fn event_detail_app() -> App {
     );
     app
 }
+
+fn dlq_entry(
+    id: &str,
+    event_id: &str,
+    connection_id: &str,
+    destination_name: &str,
+    status: &str,
+    last_response_status: Option<i64>,
+    last_error: &str,
+) -> crate::tui::model::DlqEntry {
+    crate::tui::model::DlqEntry {
+        id: id.into(),
+        event_id: event_id.into(),
+        connection_id: connection_id.into(),
+        destination_name: destination_name.into(),
+        status: status.into(),
+        attempt_count: 8,
+        last_error: Some(last_error.into()),
+        last_response_status,
+        created_at: "2026-09-22T10:00:00Z".into(),
+        updated_at: "2026-09-23T10:00:00Z".into(),
+    }
+}
+
+/// The DLQ screen of stripe-prod: billing-worker 4 exhausted / 1 failed,
+/// audit-log 0 / 2.
+pub fn dlq_app() -> App {
+    use crate::tui::model::{DlqSummary, Page};
+    let mut app = app();
+    let loaded = loaded_at(&app);
+    app.screen = Screen::Dlq;
+    app.event_screens.dlq.viewed = Some(STRIPE_ID.into());
+    app.data.dlq_summary.finish(
+        Page {
+            items: vec![
+                DlqSummary {
+                    connection_id: STRIPE_BILLING_ID.into(),
+                    destination_name: "billing-worker".into(),
+                    exhausted_count: 4,
+                    failed_count: 1,
+                },
+                DlqSummary {
+                    connection_id: STRIPE_AUDIT_ID.into(),
+                    destination_name: "audit-log".into(),
+                    exhausted_count: 0,
+                    failed_count: 2,
+                },
+            ],
+            total: None,
+        },
+        loaded,
+    );
+    app.data.dlq_entries.finish(
+        Page {
+            items: vec![
+                dlq_entry(
+                    "0198c9f0-0000-7000-8000-0000000000a1",
+                    EVENT_ID,
+                    STRIPE_BILLING_ID,
+                    "billing-worker",
+                    "exhausted",
+                    Some(500),
+                    "HTTP 500",
+                ),
+                dlq_entry(
+                    "0198c9f0-0000-7000-8000-0000000000a2",
+                    "0198c9f0-0000-7000-8000-0000000000e2",
+                    STRIPE_BILLING_ID,
+                    "billing-worker",
+                    "failed",
+                    Some(410),
+                    "HTTP 410 Gone",
+                ),
+                dlq_entry(
+                    "0198c9f0-0000-7000-8000-0000000000a3",
+                    "0198c9f0-0000-7000-8000-0000000000e3",
+                    STRIPE_AUDIT_ID,
+                    "audit-log",
+                    "failed",
+                    None,
+                    "connection refused",
+                ),
+            ],
+            total: Some(3),
+        },
+        loaded,
+    );
+    app
+}

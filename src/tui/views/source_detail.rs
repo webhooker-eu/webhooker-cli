@@ -4,7 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Paragraph, Row, Wrap};
 use ratatui::Frame;
 
-use super::{common, events, live, placeholder};
+use super::{common, dlq, events, live};
 use crate::tui::app::App;
 use crate::tui::events_state::EventsScope;
 use crate::tui::model::host_of;
@@ -32,9 +32,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, tab: SourceTab) {
         SourceTab::Connections => render_connections(frame, body, app),
         SourceTab::Events => events::render_list(frame, body, app, EventsScope::Source),
         SourceTab::Live => live::render(frame, body, app),
-        SourceTab::Dlq => {
-            placeholder::render_inline(frame, body, app, "This tab is not available yet.")
-        }
+        SourceTab::Dlq => dlq::render(frame, body, app),
     }
 }
 

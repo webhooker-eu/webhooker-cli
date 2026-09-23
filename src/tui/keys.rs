@@ -178,7 +178,8 @@ fn on_main_key(app: &mut App, code: KeyCode) -> Vec<Effect> {
         }
         Screen::Events => keys_events::on_events_list_key(app, code, EventsScope::Global),
         Screen::EventDetail { .. } => keys_events::on_event_detail_key(app, code),
-        Screen::Dlq | Screen::Stats | Screen::Relay | Screen::Settings => to_sidebar(app, code),
+        Screen::Dlq => keys_events::on_dlq_key(app, code),
+        Screen::Stats | Screen::Relay | Screen::Settings => to_sidebar(app, code),
         Screen::Login => Vec::new(),
     }
 }
@@ -231,6 +232,9 @@ fn on_source_detail_key(app: &mut App, code: KeyCode, tab: SourceTab) -> Vec<Eff
         }
         KeyCode::Esc => return app.back(),
         _ => {}
+    }
+    if tab == SourceTab::Dlq {
+        return keys_events::on_dlq_key(app, code);
     }
     if tab == SourceTab::Live {
         return keys_events::on_live_key(app, code);
@@ -426,6 +430,15 @@ pub fn submit_modal(app: &mut App) -> Vec<Effect> {
             event_id,
             public_id,
         } => keys_events::submit_replay(app, event_id, public_id),
+        FormPurpose::DlqFilters => keys_events::submit_dlq_filters(app),
+        FormPurpose::BulkResend {
+            connection_id,
+            destination_name,
+            exhausted,
+            failed,
+        } => {
+            keys_events::submit_bulk_resend(app, connection_id, destination_name, exhausted, failed)
+        }
     }
 }
 
@@ -458,6 +471,19 @@ fn confirmed(app: &mut App, action: ConfirmAction) -> Vec<Effect> {
             mutation: Mutation::ReplayEvent {
                 event_id,
                 connection_ids,
+            },
+        }],
+        ConfirmAction::ResendBulk {
+            connection_id,
+            statuses,
+            since,
+            until,
+        } => vec![Effect::Mutate {
+            mutation: Mutation::ResendBulk {
+                connection_id,
+                statuses,
+                since,
+                until,
             },
         }],
     }

@@ -268,12 +268,6 @@ fn source_connections_tab() {
     assert!(text.contains('⚡') && text.contains(" open"));
 }
 
-#[test]
-fn later_tabs_say_they_are_not_available_yet() {
-    let app = fixtures::source_detail(SourceTab::Dlq);
-    assert!(screen_text(&app, 120, 40).contains("This tab is not available yet."));
-}
-
 fn on(screen: Screen) -> App {
     let mut app = fixtures::app();
     app.screen = screen;
@@ -513,4 +507,46 @@ fn replay_form() {
     );
     assert_snapshot!("form_replay_80x24", draw(&app, 80, 24).backend());
     assert!(screen_text(&app, 80, 24).contains("[x] audit-log  disabled"));
+}
+
+#[test]
+fn dlq_screen() {
+    let app = fixtures::dlq_app();
+    snapshot_both_sizes("dlq", &app);
+    let text = screen_text(&app, 120, 40);
+    for expected in [
+        "DLQ · stripe-prod · exhausted,failed",
+        "billing-worker",
+        "4 exhausted",
+        "1 failed",
+        "Deliveries · billing-worker",
+        "HTTP 410 Gone",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?} in\n{text}");
+    }
+    assert!(
+        !text.contains("connection refused"),
+        "only the selected connection's rows"
+    );
+}
+
+#[test]
+fn dlq_tab_of_a_source_and_empty_states() {
+    let mut app = fixtures::source_detail(SourceTab::Dlq);
+    let now = app.now;
+    app.data.dlq_summary.finish(
+        crate::tui::model::Page {
+            items: Vec::new(),
+            total: None,
+        },
+        now,
+    );
+    assert!(screen_text(&app, 120, 40).contains("Nothing in the dead-letter queue."));
+}
+
+#[test]
+fn bulk_resend_form() {
+    let mut app = fixtures::dlq_app();
+    crate::tui::keys_events::open_bulk_resend(&mut app);
+    assert_snapshot!("form_bulk_resend_80x24", draw(&app, 80, 24).backend());
 }

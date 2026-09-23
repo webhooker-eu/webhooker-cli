@@ -6,7 +6,8 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use crate::tui::action::Effect;
 use crate::tui::app::{App, Confirm, ConfirmAction, FormPurpose, ModalForm};
 use crate::tui::events_state::{
-    is_rfc3339, EventFilter, EventPane, EventsScope, TimeWindow, EVENTS_PAGE_SIZE,
+    is_rfc3339, DlqPane, EventFilter, EventPane, EventsScope, TimeWindow, DLQ_STATUSES,
+    EVENTS_PAGE_SIZE,
 };
 use crate::tui::forms::form::{CheckItem, Field, Form, SelectOption};
 use crate::tui::forms::input::TextInput;
@@ -398,6 +399,242 @@ pub fn submit_replay(app: &mut App, event_id: String, public_id: String) -> Vec<
     Vec::new()
 }
 
+pub fn on_dlq_key(app: &mut App, code: KeyCode) -> Vec<Effect> {
+    let in_source_tab = matches!(app.screen, Screen::SourceDetail { .. });
+    let summaries = app
+        .data
+        .dlq_summary
+        .value
+        .as_ref()
+        .map_or(0, |page| page.items.len());
+    let entries = app.selected_dlq_entries().len();
+    let pane = app.event_screens.dlq.pane;
+    let dlq = &mut app.event_screens.dlq;
+    match pane {
+        DlqPane::Summary => {
+            if let Some(cursor) = keys::moved(dlq.summary_cursor, summaries, code) {
+                dlq.summary_cursor = cursor;
+                dlq.entries_cursor = 0;
+                return Vec::new();
+            }
+        }
+        DlqPane::Entries => {
+            if let Some(cursor) = keys::moved(dlq.entries_cursor, entries, code) {
+                dlq.entries_cursor = cursor;
+                return Vec::new();
+            }
+        }
+    }
+    match code {
+        KeyCode::Enter if pane == DlqPane::Summary => {
+            if summaries > 0 {
+                app.event_screens.dlq.pane = DlqPane::Entries;
+            }
+            Vec::new()
+        }
+        KeyCode::Enter => {
+            let selected = app
+                .selected_dlq_entries()
+                .get(app.event_screens.dlq.entries_cursor)
+                .map(|entry| entry.event_id.clone());
+            match selected {
+                Some(id) => app.open(Screen::EventDetail { id }),
+                None => Vec::new(),
+            }
+        }
+        KeyCode::Backspace => {
+            app.event_screens.dlq.pane = DlqPane::Summary;
+            Vec::new()
+        }
+        KeyCode::Esc if !in_source_tab && pane == DlqPane::Entries => {
+            app.event_screens.dlq.pane = DlqPane::Summary;
+            Vec::new()
+        }
+        KeyCode::Char('F') => {
+            open_dlq_filters(app);
+            Vec::new()
+        }
+        KeyCode::Char('R') => {
+            open_bulk_resend(app);
+            Vec::new()
+        }
+        other if !in_source_tab => keys::to_sidebar(app, other),
+        _ => Vec::new(),
+    }
+}
+
+fn status_items(checked: &[String]) -> Vec<CheckItem> {
+    DLQ_STATUSES
+        .iter()
+        .map(|status| {
+            CheckItem::new(
+                *status,
+                *status,
+                checked.iter().any(|value| value == status),
+            )
+        })
+        .collect()
+}
+
+/// `F` on the DLQ: source (DLQ screen only), statuses and failure window.
+pub fn open_dlq_filters(app: &mut App) {
+    let dlq = app.event_screens.dlq.clone();
+    let mut fields = Vec::new();
+    if !matches!(app.screen, Screen::SourceDetail { .. }) {
+        let options = app
+            .data
+            .sources
+            .value
+            .iter()
+            .flatten()
+            .map(|source| SelectOption::new(source.id.clone(), source.name.clone()))
+            .collect();
+        fields.push(Field::select(
+            "source",
+            "Source",
+            options,
+            app.dlq_source_id().as_deref(),
+        ));
+    }
+    fields.push(Field::checklist(
+        "statuses",
+        "Statuses",
+        status_items(&dlq.statuses),
+    ));
+    fields.push(Field::select(
+        "window",
+        "Failed within",
+        [
+            TimeWindow::All,
+            TimeWindow::LastHour,
+            TimeWindow::LastDay,
+            TimeWindow::LastWeek,
+        ]
+        .iter()
+        .map(|window| SelectOption::new(window.value(), window.label()))
+        .collect(),
+        Some(dlq.window.value()),
+    ));
+    app.modal = Some(ModalForm {
+        form: Form::new("DLQ filters", fields),
+        purpose: FormPurpose::DlqFilters,
+    });
+}
+
+pub fn submit_dlq_filters(app: &mut App) -> Vec<Effect> {
+    let Some(modal) = app.modal.as_mut() else {
+        return Vec::new();
+    };
+    let statuses = modal.form.checked("statuses");
+    if statuses.is_empty() {
+        modal
+            .form
+            .set_field_error("statuses", "Pick at least one status");
+        return Vec::new();
+    }
+    let window = modal
+        .form
+        .selected("window")
+        .and_then(|value| TimeWindow::from_value(&value))
+        .unwrap_or_default();
+    let source = modal.form.selected("source").and_then(non_empty);
+    app.modal = None;
+    let dlq = &mut app.event_screens.dlq;
+    dlq.statuses = statuses;
+    dlq.window = window;
+    if source.is_some() {
+        dlq.source_id = source;
+    }
+    dlq.pane = DlqPane::Summary;
+    dlq.summary_cursor = 0;
+    dlq.entries_cursor = 0;
+    app.enter()
+}
+
+/// `R` on the DLQ: resend the selected connection's dead-lettered deliveries.
+pub fn open_bulk_resend(app: &mut App) {
+    let Some(summary) = app.selected_dlq_summary().cloned() else {
+        app.toast("Nothing to resend", Tone::Warning);
+        return;
+    };
+    let items = vec![
+        CheckItem::new("exhausted", "exhausted", true)
+            .with_note(format!("{} in the DLQ", summary.exhausted_count)),
+        CheckItem::new("failed", "failed", false)
+            .with_note(format!("{} in the DLQ", summary.failed_count)),
+    ];
+    app.modal = Some(ModalForm {
+        form: Form::new(
+            format!("Resend {}", summary.destination_name),
+            vec![
+                Field::checklist("statuses", "Statuses", items),
+                Field::text("since", "Since (optional)", ""),
+                Field::text("until", "Until (optional)", ""),
+            ],
+        ),
+        purpose: FormPurpose::BulkResend {
+            connection_id: summary.connection_id,
+            destination_name: summary.destination_name,
+            exhausted: summary.exhausted_count,
+            failed: summary.failed_count,
+        },
+    });
+}
+
+pub fn submit_bulk_resend(
+    app: &mut App,
+    connection_id: String,
+    destination_name: String,
+    exhausted: i64,
+    failed: i64,
+) -> Vec<Effect> {
+    let Some(modal) = app.modal.as_mut() else {
+        return Vec::new();
+    };
+    let form = &mut modal.form;
+    let statuses = form.checked("statuses");
+    let since = non_empty(form.text("since"));
+    let until = non_empty(form.text("until"));
+    let mut valid = true;
+    if statuses.is_empty() {
+        form.set_field_error("statuses", "Pick at least one status");
+        valid = false;
+    }
+    for (key, value) in [("since", &since), ("until", &until)] {
+        if value.as_deref().is_some_and(|raw| !is_rfc3339(raw)) {
+            form.set_field_error(key, TIME_HINT);
+            valid = false;
+        }
+    }
+    if !valid {
+        return Vec::new();
+    }
+    let count: i64 = statuses
+        .iter()
+        .map(|status| match status.as_str() {
+            "exhausted" => exhausted,
+            "failed" => failed,
+            _ => 0,
+        })
+        .sum();
+    app.modal = None;
+    app.confirm = Some(Confirm::about(
+        "Resend ",
+        format!(
+            "{count} dead-lettered deliver{}",
+            if count == 1 { "y" } else { "ies" }
+        ),
+        format!(" to {destination_name}?"),
+        ConfirmAction::ResendBulk {
+            connection_id,
+            statuses,
+            since,
+            until,
+        },
+    ));
+    Vec::new()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -724,5 +961,126 @@ mod tests {
             loading.toasts.last().unwrap().text,
             "Connections are still loading; try again in a moment"
         );
+    }
+
+    use crate::tui::events_state::DlqPane;
+
+    #[test]
+    fn dlq_panes_move_and_open_events() {
+        let mut app = fixtures::dlq_app();
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.event_screens.dlq.pane, DlqPane::Entries);
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.event_screens.dlq.entries_cursor, 1);
+        press(&mut app, KeyCode::Backspace);
+        assert_eq!(app.event_screens.dlq.pane, DlqPane::Summary);
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.event_screens.dlq.summary_cursor, 1);
+        assert_eq!(app.event_screens.dlq.entries_cursor, 0);
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(
+            app.screen,
+            Screen::EventDetail {
+                id: "0198c9f0-0000-7000-8000-0000000000e3".into()
+            }
+        );
+    }
+
+    #[test]
+    fn esc_on_the_dlq_screen_returns_to_the_summary_then_the_sidebar() {
+        let mut app = fixtures::dlq_app();
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.event_screens.dlq.pane, DlqPane::Summary);
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.focus, crate::tui::app::Focus::Sidebar);
+    }
+
+    #[test]
+    fn dlq_filters_pick_the_source_statuses_and_window() {
+        let mut app = fixtures::dlq_app();
+        press(&mut app, KeyCode::Char('F'));
+        press(&mut app, KeyCode::Right);
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Char(' '));
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Right);
+        let effects = chord(&mut app, 's');
+        assert!(app.modal.is_none());
+        let dlq = &app.event_screens.dlq;
+        assert_eq!(dlq.source_id.as_deref(), Some(fixtures::GITHUB_ID));
+        assert_eq!(dlq.statuses, vec!["failed".to_string()]);
+        assert_eq!(dlq.window, TimeWindow::LastHour);
+        assert!(fetched_requests(&effects).contains(&Request::DlqEntries {
+            source_id: fixtures::GITHUB_ID.into(),
+            statuses: vec!["failed".into()],
+            window: TimeWindow::LastHour,
+        }));
+    }
+
+    #[test]
+    fn dlq_filters_need_a_status() {
+        let mut app = fixtures::dlq_app();
+        press(&mut app, KeyCode::Char('F'));
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Char(' '));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char(' '));
+        chord(&mut app, 's');
+        assert_eq!(
+            app.modal.as_ref().unwrap().form.fields[1].error.as_deref(),
+            Some("Pick at least one status")
+        );
+    }
+
+    #[test]
+    fn bulk_resend_confirms_the_count_from_the_summary() {
+        let mut app = fixtures::dlq_app();
+        press(&mut app, KeyCode::Char('R'));
+        let form = &app.modal.as_ref().unwrap().form;
+        assert_eq!(form.title, "Resend billing-worker");
+        assert_eq!(form.checked("statuses"), vec!["exhausted".to_string()]);
+        chord(&mut app, 's');
+        assert_eq!(
+            app.confirm.as_ref().unwrap().text(),
+            "Resend 4 dead-lettered deliveries to billing-worker?"
+        );
+        let effects = press(&mut app, KeyCode::Char('y'));
+        assert_eq!(
+            effects,
+            vec![Effect::Mutate {
+                mutation: Mutation::ResendBulk {
+                    connection_id: fixtures::STRIPE_BILLING_ID.into(),
+                    statuses: vec!["exhausted".into()],
+                    since: None,
+                    until: None,
+                }
+            }]
+        );
+    }
+
+    #[test]
+    fn bulk_resend_checks_its_time_bounds() {
+        let mut app = fixtures::dlq_app();
+        press(&mut app, KeyCode::Char('R'));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char(' '));
+        press(&mut app, KeyCode::Tab);
+        type_text(&mut app, "last week");
+        chord(&mut app, 's');
+        let form = &app.modal.as_ref().unwrap().form;
+        assert_eq!(form.fields[1].error.as_deref(), Some(TIME_HINT));
+        assert_eq!(
+            form.checked("statuses"),
+            vec!["exhausted".to_string(), "failed".to_string()]
+        );
+    }
+
+    #[test]
+    fn esc_in_a_source_dlq_tab_goes_back_to_the_list() {
+        let mut app = fixtures::source_detail(crate::tui::screen::SourceTab::Dlq);
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.screen, Screen::Sources);
     }
 }

@@ -147,6 +147,12 @@ pub enum ConfirmAction {
         event_id: String,
         connection_ids: Vec<String>,
     },
+    ResendBulk {
+        connection_id: String,
+        statuses: Vec<String>,
+        since: Option<String>,
+        until: Option<String>,
+    },
 }
 
 /// A yes/no question; only `y` confirms. The target is drawn in bold.
@@ -198,7 +204,17 @@ impl Confirm {
 #[derive(Debug, Clone, PartialEq)]
 pub enum FormPurpose {
     EventFilters,
-    Replay { event_id: String, public_id: String },
+    Replay {
+        event_id: String,
+        public_id: String,
+    },
+    DlqFilters,
+    BulkResend {
+        connection_id: String,
+        destination_name: String,
+        exhausted: i64,
+        failed: i64,
+    },
 }
 
 #[derive(Debug, Clone)]

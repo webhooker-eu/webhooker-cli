@@ -71,6 +71,16 @@ pub fn hints(app: &App) -> Vec<Hint> {
             ("1-5", "tabs"),
             ("esc", "back"),
         ],
+        Screen::SourceDetail {
+            tab: SourceTab::Dlq,
+            ..
+        } => vec![
+            ("enter", "open"),
+            ("R", "resend"),
+            ("F", "filters"),
+            ("bksp", "summary"),
+            ("esc", "back"),
+        ],
         Screen::SourceDetail { .. } => vec![
             ("1-5", "tabs"),
             ("esc", "back"),
@@ -110,7 +120,14 @@ pub fn hints(app: &App) -> Vec<Hint> {
             ("w", "wrap"),
             ("esc", "back"),
         ],
-        Screen::Dlq | Screen::Stats | Screen::Relay => {
+        Screen::Dlq => vec![
+            ("enter", "open"),
+            ("R", "resend"),
+            ("F", "filters"),
+            ("esc", "summary"),
+            ("?", "help"),
+        ],
+        Screen::Stats | Screen::Relay => {
             vec![("g", "jump"), ("?", "help"), ("q", "quit")]
         }
     }
@@ -155,6 +172,12 @@ pub fn help(screen: &Screen) -> Vec<(&'static str, Vec<Hint>)> {
             ("/", "filter headers"),
             ("w", "wrap the body"),
             ("R", "replay to connections"),
+        ],
+        Screen::Dlq => vec![
+            ("enter", "a connection's deliveries, then the event"),
+            ("bksp, esc", "back to the summary"),
+            ("F", "source, statuses, time range"),
+            ("R", "resend the selected connection"),
         ],
         _ => Vec::new(),
     };
