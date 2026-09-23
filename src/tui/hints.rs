@@ -49,6 +49,16 @@ pub fn hints(app: &App) -> Vec<Hint> {
             ("esc", "back"),
             ("?", "help"),
         ],
+        Screen::SourceDetail {
+            tab: SourceTab::Events,
+            ..
+        } => vec![
+            ("enter", "open"),
+            ("F", "filters"),
+            ("[ ]", "pages"),
+            ("1-5", "tabs"),
+            ("esc", "back"),
+        ],
         Screen::SourceDetail { .. } => vec![
             ("1-5", "tabs"),
             ("esc", "back"),
@@ -73,11 +83,14 @@ pub fn hints(app: &App) -> Vec<Hint> {
             ("ctrl+s", "save"),
             ("esc", "back"),
         ],
-        Screen::Events
-        | Screen::Dlq
-        | Screen::Stats
-        | Screen::Relay
-        | Screen::EventDetail { .. } => {
+        Screen::Events => vec![
+            ("enter", "open"),
+            ("F", "filters"),
+            ("[ ]", "pages"),
+            ("r", "refresh"),
+            ("?", "help"),
+        ],
+        Screen::Dlq | Screen::Stats | Screen::Relay | Screen::EventDetail { .. } => {
             vec![("g", "jump"), ("?", "help"), ("q", "quit")]
         }
     }
@@ -110,6 +123,10 @@ pub fn help(screen: &Screen) -> Vec<(&'static str, Vec<Hint>)> {
             ("h/l, space", "change a choice"),
             ("ctrl+s", "save"),
             ("esc", "back"),
+        ],
+        Screen::Events => vec![
+            ("F", "filters: source, verification, time, id"),
+            ("[ / ]", "previous / next page"),
         ],
         _ => Vec::new(),
     };

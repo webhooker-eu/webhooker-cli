@@ -382,3 +382,57 @@ fn a_modal_form_draws_over_the_screen() {
         assert!(text.contains(expected), "missing {expected:?} in\n{text}");
     }
 }
+
+#[test]
+fn events_list() {
+    let app = fixtures::events_app();
+    snapshot_both_sizes("events", &app);
+    let text = screen_text(&app, 120, 40);
+    for expected in [
+        "source: all sources · verification: any · window: all time",
+        "page 1/3 · 120 events",
+        "evt_8f2a1b",
+        "stripe-prod",
+        "github-ci",
+        "1.2 KB",
+        "✓2 ✕1",
+        "…1",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?} in\n{text}");
+    }
+}
+
+#[test]
+fn events_from_the_tail_show_pending_counters() {
+    let mut app = fixtures::events_app();
+    let page = app.data.events.value.as_mut().unwrap();
+    page.items[0].delivery_count = None;
+    page.items[0].delivered_count = None;
+    page.items[0].failed_count = None;
+    page.items[0].pending_count = None;
+    let text = screen_text(&app, 120, 40);
+    let row = text
+        .lines()
+        .find(|line| line.contains("evt_8f2a1b"))
+        .unwrap();
+    assert!(row.contains('…') && !row.contains("✓2"), "{row}");
+}
+
+#[test]
+fn events_tab_of_a_source() {
+    let mut app = fixtures::source_detail(SourceTab::Events);
+    let now = app.now;
+    app.data.events.finish(fixtures::events_page(), now);
+    assert_snapshot!("events_source_tab_120x40", draw(&app, 120, 40).backend());
+    assert!(screen_text(&app, 120, 40).contains("source: stripe-prod"));
+}
+
+#[test]
+fn event_filter_form() {
+    let mut app = fixtures::events_app();
+    crate::tui::keys_events::open_event_filters(
+        &mut app,
+        crate::tui::events_state::EventsScope::Global,
+    );
+    assert_snapshot!("form_event_filters_80x24", draw(&app, 80, 24).backend());
+}

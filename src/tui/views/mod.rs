@@ -6,6 +6,7 @@ mod connection_detail;
 mod connections;
 mod destination_detail;
 mod destinations;
+mod events;
 mod form;
 mod header;
 mod help;
@@ -89,11 +90,10 @@ fn render_screen(frame: &mut Frame, area: Rect, app: &App) {
         Screen::Connections => connections::render(frame, area, app),
         Screen::ConnectionDetail { .. } => connection_detail::render(frame, area, app),
         Screen::Settings => settings::render(frame, area, app),
-        Screen::Events
-        | Screen::Dlq
-        | Screen::Stats
-        | Screen::Relay
-        | Screen::EventDetail { .. } => placeholder::render(frame, area, app),
+        Screen::Events => events::render(frame, area, app),
+        Screen::Dlq | Screen::Stats | Screen::Relay | Screen::EventDetail { .. } => {
+            placeholder::render(frame, area, app)
+        }
         Screen::Login => {}
     }
 }

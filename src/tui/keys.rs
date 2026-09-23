@@ -5,6 +5,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::tui::action::Effect;
 use crate::tui::app::{App, Confirm, ConfirmAction, Focus, FormPurpose};
+use crate::tui::events_state::EventsScope;
 use crate::tui::forms::input::TextInput;
 use crate::tui::forms::settings_form::{FormOutcome, SettingsForm};
 use crate::tui::keys_events;
@@ -172,8 +173,8 @@ fn on_main_key(app: &mut App, code: KeyCode) -> Vec<Effect> {
         Screen::DestinationDetail { .. } | Screen::ConnectionDetail { .. } => {
             on_text_pane_key(app, code)
         }
-        Screen::Events
-        | Screen::Dlq
+        Screen::Events => keys_events::on_events_list_key(app, code, EventsScope::Global),
+        Screen::Dlq
         | Screen::Stats
         | Screen::Relay
         | Screen::Settings
@@ -230,6 +231,9 @@ fn on_source_detail_key(app: &mut App, code: KeyCode, tab: SourceTab) -> Vec<Eff
         }
         KeyCode::Esc => return app.back(),
         _ => {}
+    }
+    if tab == SourceTab::Events {
+        return keys_events::on_events_list_key(app, code, EventsScope::Source);
     }
     if tab != SourceTab::Connections {
         return Vec::new();

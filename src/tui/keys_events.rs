@@ -1,10 +1,15 @@
 //! Keys of the Events, Live, event detail, DLQ and Stats screens, and the
 //! submits of their forms.
 
+use ratatui::crossterm::event::KeyCode;
+
 use crate::tui::action::Effect;
 use crate::tui::app::{App, FormPurpose, ModalForm};
-use crate::tui::events_state::{is_rfc3339, EventFilter, EventsScope, TimeWindow};
+use crate::tui::events_state::{
+    is_rfc3339, EventFilter, EventsScope, TimeWindow, EVENTS_PAGE_SIZE,
+};
 use crate::tui::forms::form::{Field, Form, SelectOption};
+use crate::tui::keys;
 use crate::tui::screen::Screen;
 
 const TIME_HINT: &str = "Use RFC 3339, e.g. 2026-09-20T10:00:00Z";
@@ -133,6 +138,58 @@ pub fn submit_event_filters(app: &mut App) -> Vec<Effect> {
     let state = app.event_screens.events_mut(scope);
     state.filter = filter;
     state.page = 1;
+    state.cursor = 0;
+    app.enter()
+}
+
+pub fn on_events_list_key(app: &mut App, code: KeyCode, scope: EventsScope) -> Vec<Effect> {
+    let rows = app
+        .data
+        .events
+        .value
+        .as_ref()
+        .map_or(0, |page| page.items.len());
+    let cursor = app.event_screens.events(scope).cursor;
+    if let Some(moved) = keys::moved(cursor, rows, code) {
+        app.event_screens.events_mut(scope).cursor = moved;
+        return Vec::new();
+    }
+    match code {
+        KeyCode::Enter => {
+            let selected = app
+                .data
+                .events
+                .value
+                .as_ref()
+                .and_then(|page| page.items.get(cursor))
+                .map(|event| event.id.clone());
+            match selected {
+                Some(id) => app.open(Screen::EventDetail { id }),
+                None => Vec::new(),
+            }
+        }
+        KeyCode::Char('F') => {
+            open_event_filters(app, scope);
+            Vec::new()
+        }
+        KeyCode::Char(']') => turn_page(app, scope, 1),
+        KeyCode::Char('[') => turn_page(app, scope, -1),
+        other if scope == EventsScope::Global => keys::to_sidebar(app, other),
+        _ => Vec::new(),
+    }
+}
+
+fn turn_page(app: &mut App, scope: EventsScope, step: i64) -> Vec<Effect> {
+    let Some(total) = app.data.events.value.as_ref().and_then(|page| page.total) else {
+        return Vec::new();
+    };
+    let last_page = ((total + EVENTS_PAGE_SIZE - 1) / EVENTS_PAGE_SIZE).max(1);
+    let state = app.event_screens.events_mut(scope);
+    let target = (state.page + step).clamp(1, last_page);
+    if target == state.page {
+        return Vec::new();
+    }
+    state.page = target;
     state.cursor = 0;
     app.enter()
 }
@@ -270,5 +327,70 @@ mod tests {
         assert!(!app.quit);
         assert!(!app.help_open);
         assert!(app.modal.is_some());
+    }
+
+    #[test]
+    fn enter_opens_the_selected_event() {
+        let mut app = fixtures::events_app();
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(
+            app.screen,
+            Screen::EventDetail {
+                id: "0198c9f0-0000-7000-8000-0000000000e2".into()
+            }
+        );
+    }
+
+    #[test]
+    fn brackets_turn_pages_within_the_total() {
+        let mut app = fixtures::events_app();
+        let effects = press(&mut app, KeyCode::Char(']'));
+        assert_eq!(app.event_screens.global.page, 2);
+        assert!(fetched_requests(&effects).contains(&Request::Events {
+            filter: EventFilter::default(),
+            page: 2
+        }));
+        // Turning a page reloads the list; put page data back each time.
+        let now = app.now;
+        app.data.events.finish(fixtures::events_page(), now);
+        press(&mut app, KeyCode::Char(']'));
+        app.data.events.finish(fixtures::events_page(), now);
+        assert!(
+            press(&mut app, KeyCode::Char(']')).is_empty(),
+            "120 events are 3 pages"
+        );
+        assert_eq!(app.event_screens.global.page, 3);
+        app.data.events.finish(fixtures::events_page(), now);
+        press(&mut app, KeyCode::Char('['));
+        assert_eq!(app.event_screens.global.page, 2);
+        app.data.events = Default::default();
+        assert!(
+            press(&mut app, KeyCode::Char(']')).is_empty(),
+            "no paging before the list loads"
+        );
+    }
+
+    #[test]
+    fn capital_f_opens_the_filters_and_esc_leaves_to_the_sidebar() {
+        let mut app = fixtures::events_app();
+        press(&mut app, KeyCode::Char('F'));
+        assert_eq!(
+            app.modal.as_ref().unwrap().purpose,
+            FormPurpose::EventFilters
+        );
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.focus, crate::tui::app::Focus::Sidebar);
+    }
+
+    #[test]
+    fn the_source_events_tab_pages_its_own_state() {
+        let mut app = fixtures::source_detail(crate::tui::screen::SourceTab::Events);
+        let now = app.now;
+        app.data.events.finish(fixtures::events_page(), now);
+        press(&mut app, KeyCode::Char(']'));
+        assert_eq!(app.event_screens.source.page, 2);
+        assert_eq!(app.event_screens.global.page, 1);
     }
 }

@@ -197,6 +197,7 @@ pub fn source_detail(tab: SourceTab) -> App {
         id: STRIPE_ID.into(),
         tab,
     };
+    app.event_screens.source_for = Some(STRIPE_ID.into());
     app.data.source.finish(
         source(STRIPE_ID, "stripe-prod", 1204, "stripe", "active"),
         loaded,
@@ -326,4 +327,62 @@ pub fn event_detail() -> crate::tui::model::EventDetail {
         ]
     }))
     .unwrap()
+}
+
+pub fn event_summary(
+    id: &str,
+    public_id: &str,
+    source_id: &str,
+    verification: &str,
+    counters: (i64, i64, i64, i64),
+) -> crate::tui::model::EventSummary {
+    let (total, delivered, failed, pending) = counters;
+    serde_json::from_value(json!({
+        "id": id,
+        "public_id": public_id,
+        "source_id": source_id,
+        "method": "POST",
+        "content_type": "application/json",
+        "verification_status": verification,
+        "body_size": 1234,
+        "received_at": "2026-09-23T12:04:11Z",
+        "delivery_count": total,
+        "delivered_count": delivered,
+        "failed_count": failed,
+        "pending_count": pending
+    }))
+    .unwrap()
+}
+
+pub fn events_page() -> crate::tui::model::Page<crate::tui::model::EventSummary> {
+    crate::tui::model::Page {
+        items: vec![
+            event_summary(EVENT_ID, "evt_8f2a1b", STRIPE_ID, "verified", (3, 2, 1, 0)),
+            event_summary(
+                "0198c9f0-0000-7000-8000-0000000000e2",
+                "evt_77c1d0",
+                GITHUB_ID,
+                "failed",
+                (1, 0, 0, 1),
+            ),
+            event_summary(
+                "0198c9f0-0000-7000-8000-0000000000e3",
+                "evt_1b9e44",
+                STRIPE_ID,
+                "skipped",
+                (0, 0, 0, 0),
+            ),
+        ],
+        total: Some(120),
+    }
+}
+
+/// On the Events screen with page 1 of 3 loaded.
+pub fn events_app() -> App {
+    let mut app = app();
+    let loaded = loaded_at(&app);
+    app.screen = Screen::Events;
+    app.data.events.finish(events_page(), loaded);
+    app.event_screens.shown = Some((crate::tui::events_state::EventFilter::default(), 1));
+    app
 }
