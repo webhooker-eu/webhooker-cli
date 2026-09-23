@@ -188,6 +188,25 @@ impl std::fmt::Display for ApiError {
 
 impl std::error::Error for ApiError {}
 
+impl ApiError {
+    /// An error that did not come from an HTTP exchange (tests, synthetic
+    /// failures). It renders as `message (HTTP status)`.
+    pub fn synthetic(status: u16, code: Option<&str>, message: &str) -> Self {
+        Self {
+            status,
+            code: code.map(str::to_string),
+            message: message.to_string(),
+            retry_after: None,
+            rendered: format!("{message} (HTTP {status})"),
+        }
+    }
+
+    pub fn with_retry_after(mut self, retry_after: Duration) -> Self {
+        self.retry_after = Some(retry_after);
+        self
+    }
+}
+
 /// Error body the API returns for every non-2xx response.
 #[derive(Deserialize)]
 struct ApiErrorBody {
