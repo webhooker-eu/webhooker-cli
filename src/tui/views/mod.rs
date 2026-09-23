@@ -5,7 +5,9 @@ mod common;
 mod confirm;
 mod header;
 mod help;
+mod login;
 mod placeholder;
+mod settings;
 mod sidebar;
 mod status_line;
 mod too_small;
@@ -17,6 +19,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::Frame;
 
 use crate::tui::app::App;
+use crate::tui::screen::Screen;
 
 pub const MIN_WIDTH: u16 = 60;
 pub const MIN_HEIGHT: u16 = 15;
@@ -50,6 +53,10 @@ pub fn render(frame: &mut Frame, app: &App) {
 }
 
 fn render_body(frame: &mut Frame, body: Rect, app: &App) {
+    if app.screen == Screen::Login {
+        login::render(frame, body, app);
+        return;
+    }
     let main = if body.width >= WIDE_LAYOUT {
         let [sidebar_area, main] =
             Layout::horizontal([Constraint::Length(SIDEBAR_WIDTH), Constraint::Min(0)]).areas(body);
@@ -65,5 +72,8 @@ fn render_body(frame: &mut Frame, body: Rect, app: &App) {
 }
 
 fn render_screen(frame: &mut Frame, area: Rect, app: &App) {
-    placeholder::render(frame, area, app);
+    match &app.screen {
+        Screen::Settings => settings::render(frame, area, app),
+        _ => placeholder::render(frame, area, app),
+    }
 }

@@ -135,3 +135,50 @@ fn ascii_mode_draws_only_ascii() {
     assert!(text.is_ascii(), "{text}");
     assert!(text.contains("|  | |_| |/"));
 }
+fn login_app() -> App {
+    let mut app = App::new(fixtures::init(false));
+    app.start();
+    app
+}
+
+#[test]
+fn login_screen() {
+    let app = login_app();
+    snapshot_both_sizes("login", &app);
+    let text = screen_text(&app, 80, 24);
+    assert!(text.contains("API key"));
+    assert!(text.contains("https://app.webhooker.eu"));
+    assert!(!text.contains("Sources"), "no sidebar before login");
+}
+
+#[test]
+fn login_masks_the_key_and_shows_errors_inline() {
+    let mut app = login_app();
+    app.login.api_key.set("whk_secret");
+    app.login.error = Some(crate::tui::app::KEY_REJECTED_MESSAGE.to_string());
+    let text = screen_text(&app, 80, 24);
+    assert!(text.contains("••••••••••"));
+    assert!(!text.contains("whk_secret"));
+    assert!(text.contains("API key is invalid or revoked"));
+}
+
+#[test]
+fn settings_screen() {
+    let mut app = fixtures::app();
+    app.switch_to(Section::Settings);
+    snapshot_both_sizes("settings", &app);
+    let text = screen_text(&app, 120, 40);
+    assert!(text.contains("Request budget (%)"));
+    assert!(text.contains("‹ auto ›"));
+}
+
+#[test]
+fn settings_show_unsaved_changes_and_errors() {
+    let mut app = fixtures::app();
+    app.switch_to(Section::Settings);
+    let form = app.settings_form.as_mut().unwrap();
+    form.draft.compact_header = true;
+    assert!(screen_text(&app, 120, 40).contains("Unsaved changes"));
+    app.settings_form.as_mut().unwrap().error = Some("disk full".into());
+    assert!(screen_text(&app, 120, 40).contains("disk full"));
+}
