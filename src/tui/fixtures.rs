@@ -414,3 +414,38 @@ pub fn live_app() -> App {
         .collect();
     app
 }
+
+/// The event detail of `evt_8f2a1b`, opened from the Events list, with the
+/// source's connections loaded (audit-log disabled).
+pub fn event_detail_app() -> App {
+    let mut app = events_app();
+    let loaded = loaded_at(&app);
+    app.history.push(Screen::Events);
+    app.screen = Screen::EventDetail {
+        id: EVENT_ID.into(),
+    };
+    app.event_screens.detail_for = Some(EVENT_ID.into());
+    app.data.event.finish(event_detail(), loaded);
+    let mut audit = source_connection(
+        STRIPE_AUDIT_ID,
+        AUDIT_ID,
+        "audit-log",
+        "https://audit.example.com/in",
+        "open",
+    );
+    audit.enabled = false;
+    app.data.source_connections.finish(
+        vec![
+            source_connection(
+                STRIPE_BILLING_ID,
+                BILLING_ID,
+                "billing-worker",
+                "https://billing.internal/hooks",
+                "closed",
+            ),
+            audit,
+        ],
+        loaded,
+    );
+    app
+}

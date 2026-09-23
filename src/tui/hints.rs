@@ -18,6 +18,9 @@ pub fn hints(app: &App) -> Vec<Hint> {
     if app.source_search.is_some() {
         return vec![("enter", "apply filter"), ("esc", "cancel")];
     }
+    if app.event_screens.detail.header_search.is_some() {
+        return vec![("enter", "apply filter"), ("esc", "cancel")];
+    }
     if app.focus == Focus::Sidebar && app.screen != Screen::Login {
         return vec![
             ("j/k", "section"),
@@ -99,7 +102,15 @@ pub fn hints(app: &App) -> Vec<Hint> {
             ("r", "refresh"),
             ("?", "help"),
         ],
-        Screen::Dlq | Screen::Stats | Screen::Relay | Screen::EventDetail { .. } => {
+        Screen::EventDetail { .. } => vec![
+            ("tab", "pane"),
+            ("enter", "attempts"),
+            ("R", "replay"),
+            ("/", "headers"),
+            ("w", "wrap"),
+            ("esc", "back"),
+        ],
+        Screen::Dlq | Screen::Stats | Screen::Relay => {
             vec![("g", "jump"), ("?", "help"), ("q", "quit")]
         }
     }
@@ -136,6 +147,14 @@ pub fn help(screen: &Screen) -> Vec<(&'static str, Vec<Hint>)> {
         Screen::Events => vec![
             ("F", "filters: source, verification, time, id"),
             ("[ / ]", "previous / next page"),
+        ],
+        Screen::EventDetail { .. } => vec![
+            ("tab", "headers, body, deliveries"),
+            ("j/k, g/G", "scroll, or move between deliveries"),
+            ("enter", "show a delivery's attempts"),
+            ("/", "filter headers"),
+            ("w", "wrap the body"),
+            ("R", "replay to connections"),
         ],
         _ => Vec::new(),
     };

@@ -143,6 +143,10 @@ pub struct Toast {
 pub enum ConfirmAction {
     DiscardSettings,
     DiscardForm,
+    ReplayEvent {
+        event_id: String,
+        connection_ids: Vec<String>,
+    },
 }
 
 /// A yes/no question; only `y` confirms. The target is drawn in bold.
@@ -194,6 +198,7 @@ impl Confirm {
 #[derive(Debug, Clone, PartialEq)]
 pub enum FormPurpose {
     EventFilters,
+    Replay { event_id: String, public_id: String },
 }
 
 #[derive(Debug, Clone)]

@@ -462,3 +462,55 @@ fn live_tab_states() {
         crate::tui::events_state::TailStatus::Failed("source not found on the server".into());
     assert!(screen_text(&app, 120, 40).contains("✕ source not found on the server"));
 }
+
+#[test]
+fn event_detail() {
+    let app = fixtures::event_detail_app();
+    snapshot_both_sizes("event_detail", &app);
+    let text = screen_text(&app, 120, 40);
+    for expected in [
+        "POST evt_8f2a1b",
+        "content-type: application/json",
+        "user-agent: Stripe/1.0",
+        "\"type\": \"invoice.paid\"",
+        "billing-worker",
+        "audit-log",
+        "exhausted",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?} in\n{text}");
+    }
+}
+
+#[test]
+fn expanded_attempts_and_header_filters() {
+    let mut app = fixtures::event_detail_app();
+    app.event_screens.detail.expanded = Some("0198c9f0-0000-7000-8000-0000000000f2".into());
+    app.event_screens.detail.header_filter = Some("signature".into());
+    let text = screen_text(&app, 120, 40);
+    assert!(text.contains("→ 500"));
+    assert!(text.contains("connection refused"));
+    assert!(text.contains("{\"error\":\"db timeout\"}"));
+    assert!(text.contains("stripe-signature"));
+    assert!(!text.contains("user-agent"));
+}
+
+#[test]
+fn binary_bodies_are_hex_dumped() {
+    let mut app = fixtures::event_detail_app();
+    app.data.event.value.as_mut().unwrap().body_base64 = Some("//4AAQ==".into());
+    assert_snapshot!("event_detail_binary_120x40", draw(&app, 120, 40).backend());
+}
+
+#[test]
+fn replay_form() {
+    let mut app = fixtures::event_detail_app();
+    crate::tui::app::update(
+        &mut app,
+        crate::tui::action::Action::Key(ratatui::crossterm::event::KeyEvent::new(
+            ratatui::crossterm::event::KeyCode::Char('R'),
+            ratatui::crossterm::event::KeyModifiers::NONE,
+        )),
+    );
+    assert_snapshot!("form_replay_80x24", draw(&app, 80, 24).backend());
+    assert!(screen_text(&app, 80, 24).contains("[x] audit-log  disabled"));
+}

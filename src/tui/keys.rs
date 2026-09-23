@@ -3,7 +3,7 @@
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::tui::action::Effect;
+use crate::tui::action::{Effect, Mutation};
 use crate::tui::app::{App, Confirm, ConfirmAction, Focus, FormPurpose};
 use crate::tui::events_state::EventsScope;
 use crate::tui::forms::input::TextInput;
@@ -49,6 +49,9 @@ pub fn handle(app: &mut App, key: KeyEvent) -> Vec<Effect> {
     }
     if app.source_search.is_some() {
         return on_search_key(app, key);
+    }
+    if app.event_screens.detail.header_search.is_some() {
+        return keys_events::on_header_search_key(app, key);
     }
     if app.pending_jump {
         app.pending_jump = false;
@@ -174,11 +177,8 @@ fn on_main_key(app: &mut App, code: KeyCode) -> Vec<Effect> {
             on_text_pane_key(app, code)
         }
         Screen::Events => keys_events::on_events_list_key(app, code, EventsScope::Global),
-        Screen::Dlq
-        | Screen::Stats
-        | Screen::Relay
-        | Screen::Settings
-        | Screen::EventDetail { .. } => to_sidebar(app, code),
+        Screen::EventDetail { .. } => keys_events::on_event_detail_key(app, code),
+        Screen::Dlq | Screen::Stats | Screen::Relay | Screen::Settings => to_sidebar(app, code),
         Screen::Login => Vec::new(),
     }
 }
@@ -422,6 +422,10 @@ pub fn submit_modal(app: &mut App) -> Vec<Effect> {
     let purpose = modal.purpose.clone();
     match purpose {
         FormPurpose::EventFilters => keys_events::submit_event_filters(app),
+        FormPurpose::Replay {
+            event_id,
+            public_id,
+        } => keys_events::submit_replay(app, event_id, public_id),
     }
 }
 
@@ -447,6 +451,15 @@ fn confirmed(app: &mut App, action: ConfirmAction) -> Vec<Effect> {
             app.modal = None;
             Vec::new()
         }
+        ConfirmAction::ReplayEvent {
+            event_id,
+            connection_ids,
+        } => vec![Effect::Mutate {
+            mutation: Mutation::ReplayEvent {
+                event_id,
+                connection_ids,
+            },
+        }],
     }
 }
 

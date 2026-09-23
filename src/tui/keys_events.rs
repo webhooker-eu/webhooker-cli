@@ -1,16 +1,18 @@
 //! Keys of the Events, Live, event detail, DLQ and Stats screens, and the
 //! submits of their forms.
 
-use ratatui::crossterm::event::KeyCode;
+use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
 use crate::tui::action::Effect;
-use crate::tui::app::{App, FormPurpose, ModalForm};
+use crate::tui::app::{App, Confirm, ConfirmAction, FormPurpose, ModalForm};
 use crate::tui::events_state::{
-    is_rfc3339, EventFilter, EventsScope, TimeWindow, EVENTS_PAGE_SIZE,
+    is_rfc3339, EventFilter, EventPane, EventsScope, TimeWindow, EVENTS_PAGE_SIZE,
 };
-use crate::tui::forms::form::{Field, Form, SelectOption};
+use crate::tui::forms::form::{CheckItem, Field, Form, SelectOption};
+use crate::tui::forms::input::TextInput;
 use crate::tui::keys;
 use crate::tui::screen::Screen;
+use crate::tui::theme::Tone;
 
 const TIME_HINT: &str = "Use RFC 3339, e.g. 2026-09-20T10:00:00Z";
 
@@ -217,6 +219,183 @@ pub fn on_live_key(app: &mut App, code: KeyCode) -> Vec<Effect> {
         }
         _ => Vec::new(),
     }
+}
+
+const SCROLL_PAGE: u16 = 10;
+
+fn scroll(position: &mut u16, limit: u16, code: KeyCode) {
+    *position = match code {
+        KeyCode::Down | KeyCode::Char('j') => position.saturating_add(1).min(limit),
+        KeyCode::Up | KeyCode::Char('k') => position.saturating_sub(1),
+        KeyCode::PageDown => position.saturating_add(SCROLL_PAGE).min(limit),
+        KeyCode::PageUp => position.saturating_sub(SCROLL_PAGE),
+        KeyCode::Char('g') | KeyCode::Home => 0,
+        KeyCode::Char('G') | KeyCode::End => limit,
+        _ => *position,
+    };
+}
+
+pub fn on_event_detail_key(app: &mut App, code: KeyCode) -> Vec<Effect> {
+    match code {
+        KeyCode::Esc | KeyCode::Left | KeyCode::Char('h') => return app.back(),
+        KeyCode::Char('R') => return open_replay(app),
+        _ => {}
+    }
+    let deliveries: Vec<String> = app
+        .data
+        .event
+        .value
+        .as_ref()
+        .map(|event| {
+            event
+                .deliveries
+                .iter()
+                .map(|delivery| delivery.id.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    let view = &mut app.event_screens.detail;
+    match code {
+        KeyCode::Tab => view.pane = view.pane.next(),
+        KeyCode::BackTab => view.pane = view.pane.previous(),
+        KeyCode::Char('w') => view.wrap = !view.wrap,
+        KeyCode::Char('/') => {
+            view.pane = EventPane::Headers;
+            view.header_search = Some(TextInput::new(
+                view.header_filter.clone().unwrap_or_default(),
+                false,
+            ));
+        }
+        KeyCode::Enter if view.pane == EventPane::Deliveries => {
+            if let Some(id) = deliveries.get(view.delivery_cursor) {
+                view.expanded = if view.expanded.as_ref() == Some(id) {
+                    None
+                } else {
+                    Some(id.clone())
+                };
+            }
+        }
+        other => match view.pane {
+            EventPane::Headers => scroll(&mut view.headers_scroll, view.headers_limit.get(), other),
+            EventPane::Body => scroll(&mut view.body_scroll, view.body_limit.get(), other),
+            EventPane::Deliveries => {
+                if let Some(cursor) = keys::moved(view.delivery_cursor, deliveries.len(), other) {
+                    view.delivery_cursor = cursor;
+                }
+            }
+        },
+    }
+    Vec::new()
+}
+
+pub fn on_header_search_key(app: &mut App, key: KeyEvent) -> Vec<Effect> {
+    let view = &mut app.event_screens.detail;
+    match key.code {
+        KeyCode::Esc => view.header_search = None,
+        KeyCode::Enter => {
+            let value = view
+                .header_search
+                .take()
+                .map(|input| input.value().trim().to_string())
+                .unwrap_or_default();
+            view.header_filter = (!value.is_empty()).then_some(value);
+            view.headers_scroll = 0;
+        }
+        _ => {
+            if let Some(input) = view.header_search.as_mut() {
+                input.handle(key);
+            }
+        }
+    }
+    Vec::new()
+}
+
+/// `R`: a checklist of the source's connections, all selected, disabled
+/// ones marked.
+fn open_replay(app: &mut App) -> Vec<Effect> {
+    let Some(event) = app.data.event.value.as_ref() else {
+        return Vec::new();
+    };
+    let (event_id, public_id, source_id) = (
+        event.id.clone(),
+        event.public_id.clone(),
+        event.source_id.clone(),
+    );
+    let connections = app
+        .data
+        .source_connections
+        .value
+        .clone()
+        .filter(|connections| {
+            connections
+                .iter()
+                .all(|connection| connection.source_id == source_id)
+        });
+    let Some(connections) = connections else {
+        app.toast(
+            "Connections are still loading; try again in a moment",
+            Tone::Warning,
+        );
+        return Vec::new();
+    };
+    if connections.is_empty() {
+        app.toast("This source has no connections to replay to", Tone::Warning);
+        return Vec::new();
+    }
+    let items = connections
+        .iter()
+        .map(|connection| {
+            let item = CheckItem::new(
+                connection.id.clone(),
+                connection.destination.name.clone(),
+                true,
+            );
+            if connection.enabled {
+                item
+            } else {
+                item.with_note("disabled")
+            }
+        })
+        .collect();
+    app.modal = Some(ModalForm {
+        form: Form::new(
+            format!("Replay {public_id}"),
+            vec![Field::checklist("connections", "Connections", items)],
+        ),
+        purpose: FormPurpose::Replay {
+            event_id,
+            public_id,
+        },
+    });
+    Vec::new()
+}
+
+pub fn submit_replay(app: &mut App, event_id: String, public_id: String) -> Vec<Effect> {
+    let Some(modal) = app.modal.as_mut() else {
+        return Vec::new();
+    };
+    let connection_ids = modal.form.checked("connections");
+    if connection_ids.is_empty() {
+        modal
+            .form
+            .set_field_error("connections", "Pick at least one connection");
+        return Vec::new();
+    }
+    let count = connection_ids.len();
+    app.modal = None;
+    app.confirm = Some(Confirm::about(
+        "Replay ",
+        public_id,
+        format!(
+            " to {count} connection{}?",
+            if count == 1 { "" } else { "s" }
+        ),
+        ConfirmAction::ReplayEvent {
+            event_id,
+            connection_ids,
+        },
+    ));
+    Vec::new()
 }
 
 #[cfg(test)]
@@ -438,6 +617,112 @@ mod tests {
             Screen::EventDetail {
                 id: "id-evt_new".into()
             }
+        );
+    }
+
+    use crate::tui::action::Mutation;
+    use crate::tui::events_state::EventPane;
+
+    #[test]
+    fn tab_cycles_the_panes_and_keys_act_on_the_focused_one() {
+        let mut app = fixtures::event_detail_app();
+        app.event_screens.detail.headers_limit.set(5);
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('G'));
+        assert_eq!(app.event_screens.detail.headers_scroll, 5);
+        press(&mut app, KeyCode::Char('g'));
+        assert_eq!(app.event_screens.detail.headers_scroll, 0);
+        assert!(!app.pending_jump, "g means top inside a text pane");
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.event_screens.detail.pane, EventPane::Deliveries);
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(
+            app.event_screens.detail.expanded.as_deref(),
+            Some("0198c9f0-0000-7000-8000-0000000000f2")
+        );
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.event_screens.detail.expanded, None);
+        press(&mut app, KeyCode::Char('w'));
+        assert!(app.event_screens.detail.wrap);
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.screen, Screen::Events);
+    }
+
+    #[test]
+    fn slash_filters_headers_without_triggering_hotkeys() {
+        let mut app = fixtures::event_detail_app();
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Char('/'));
+        assert_eq!(app.event_screens.detail.pane, EventPane::Headers);
+        type_text(&mut app, "quser");
+        assert!(!app.quit);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(
+            app.event_screens.detail.header_filter.as_deref(),
+            Some("quser")
+        );
+        press(&mut app, KeyCode::Char('/'));
+        chord(&mut app, 'u');
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.event_screens.detail.header_filter, None);
+    }
+
+    #[test]
+    fn replay_asks_for_connections_then_confirmation() {
+        let mut app = fixtures::event_detail_app();
+        press(&mut app, KeyCode::Char('R'));
+        let modal = app.modal.as_ref().expect("the replay form opens");
+        assert_eq!(modal.form.title, "Replay evt_8f2a1b");
+        assert_eq!(
+            modal.form.checked("connections"),
+            vec![
+                fixtures::STRIPE_BILLING_ID.to_string(),
+                fixtures::STRIPE_AUDIT_ID.to_string()
+            ]
+        );
+        chord(&mut app, 's');
+        assert!(app.modal.is_none());
+        assert_eq!(
+            app.confirm.as_ref().unwrap().text(),
+            "Replay evt_8f2a1b to 2 connections?"
+        );
+        let effects = press(&mut app, KeyCode::Char('y'));
+        assert_eq!(
+            effects,
+            vec![Effect::Mutate {
+                mutation: Mutation::ReplayEvent {
+                    event_id: fixtures::EVENT_ID.into(),
+                    connection_ids: vec![
+                        fixtures::STRIPE_BILLING_ID.into(),
+                        fixtures::STRIPE_AUDIT_ID.into()
+                    ],
+                }
+            }]
+        );
+    }
+
+    #[test]
+    fn replay_needs_a_connection_and_loaded_connections() {
+        let mut app = fixtures::event_detail_app();
+        press(&mut app, KeyCode::Char('R'));
+        press(&mut app, KeyCode::Char(' '));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char(' '));
+        chord(&mut app, 's');
+        assert_eq!(
+            app.modal.as_ref().unwrap().form.fields[0].error.as_deref(),
+            Some("Pick at least one connection")
+        );
+
+        let mut loading = fixtures::event_detail_app();
+        loading.data.source_connections = Default::default();
+        press(&mut loading, KeyCode::Char('R'));
+        assert!(loading.modal.is_none());
+        assert_eq!(
+            loading.toasts.last().unwrap().text,
+            "Connections are still loading; try again in a moment"
         );
     }
 }
