@@ -636,17 +636,13 @@ fn optional_json(raw: Option<&str>) -> Result<Option<serde_json::Value>> {
 }
 
 fn optional_verification(raw: Option<&str>) -> Result<Option<serde_json::Value>> {
-    raw.map(|raw| {
-        args::parse_verification_arg(raw, || Ok(rpassword::prompt_password("Signing secret: ")?))
-    })
-    .transpose()
+    raw.map(|raw| args::parse_verification_arg(raw, || args::read_secret("Signing secret: ")))
+        .transpose()
 }
 
 fn optional_auth(raw: Option<&str>) -> Result<Option<serde_json::Value>> {
     raw.map(|raw| {
-        destinations::parse_auth_arg(raw, || {
-            Ok(rpassword::prompt_password("Outbound signing secret: ")?)
-        })
+        destinations::parse_auth_arg(raw, || args::read_secret("Outbound signing secret: "))
     })
     .transpose()
 }
