@@ -6,7 +6,10 @@ use crate::tui::screen::{Screen, SourceTab};
 pub type Hint = (&'static str, &'static str);
 
 pub fn hints(app: &App) -> Vec<Hint> {
-    if app.confirm.is_some() {
+    if let Some(confirm) = &app.confirm {
+        if confirm.typed_name.is_some() {
+            return vec![("enter", "confirm"), ("esc", "cancel")];
+        }
         return vec![("y", "confirm"), ("n", "cancel")];
     }
     if app.help_open {

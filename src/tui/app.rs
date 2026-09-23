@@ -155,6 +155,30 @@ pub enum ConfirmAction {
         until: Option<String>,
     },
     QuitAndStopRelay,
+    SetSourceStatus {
+        id: String,
+        status: String,
+    },
+    SetDestinationStatus {
+        id: String,
+        status: String,
+    },
+    SetConnectionEnabled {
+        id: String,
+        enabled: bool,
+    },
+    RotateSourceToken {
+        id: String,
+    },
+    DeleteSource {
+        id: String,
+    },
+    DeleteDestination {
+        id: String,
+    },
+    DeleteConnection {
+        id: String,
+    },
 }
 
 /// A yes/no question; only `y` confirms. The target is drawn in bold.
@@ -164,6 +188,7 @@ pub struct Confirm {
     pub target: Option<String>,
     pub after: String,
     pub action: ConfirmAction,
+    pub typed_name: Option<TypedName>,
 }
 
 impl Confirm {
@@ -173,6 +198,7 @@ impl Confirm {
             target: None,
             after: String::new(),
             action,
+            typed_name: None,
         }
     }
 
@@ -188,6 +214,7 @@ impl Confirm {
             target: Some(target.into()),
             after: after.into(),
             action,
+            typed_name: None,
         }
     }
 
@@ -198,6 +225,29 @@ impl Confirm {
             self.target.as_deref().unwrap_or(""),
             self.after
         )
+    }
+}
+
+/// A delete that is only confirmed by typing the resource's name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypedName {
+    pub expected: String,
+    pub input: TextInput,
+    /// Set when Enter was pressed with a different name.
+    pub mismatch: bool,
+}
+
+impl TypedName {
+    pub fn new(expected: impl Into<String>) -> Self {
+        Self {
+            expected: expected.into(),
+            input: TextInput::default(),
+            mismatch: false,
+        }
+    }
+
+    pub fn matches(&self) -> bool {
+        self.input.value().trim() == self.expected
     }
 }
 

@@ -18,7 +18,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, confirm: &Confirm) {
         ));
     }
     question.push(Span::styled(confirm.after.clone(), theme.fg(Tone::Text)));
-    let lines = vec![
+    let mut lines = vec![
         Line::from(question),
         Line::raw(""),
         Line::from(vec![
@@ -28,9 +28,36 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, confirm: &Confirm) {
             Span::styled(" no", theme.fg(Tone::Muted)),
         ]),
     ];
+    if let Some(typed) = &confirm.typed_name {
+        let input_style = if typed.mismatch {
+            theme.fg(Tone::Danger)
+        } else {
+            theme.fg(Tone::Text)
+        };
+        lines.truncate(2);
+        lines.push(Line::from(vec![
+            Span::styled("Type ", theme.fg(Tone::Muted)),
+            Span::styled(
+                typed.expected.clone(),
+                theme.fg(Tone::Text).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" to confirm:", theme.fg(Tone::Muted)),
+        ]));
+        lines.push(Line::from(Span::styled(
+            format!("> {}", typed.input.value()),
+            input_style,
+        )));
+        lines.push(Line::raw(""));
+        lines.push(Line::from(vec![
+            Span::styled("enter", theme.fg(Tone::Accent)),
+            Span::styled(" confirm   ", theme.fg(Tone::Muted)),
+            Span::styled("esc", theme.fg(Tone::Accent)),
+            Span::styled(" cancel", theme.fg(Tone::Muted)),
+        ]));
+    }
     let width =
         (confirm.text().chars().count() as u16 + 6).clamp(30, area.width.saturating_sub(4).max(30));
-    let popup = common::centered(area, width, 5);
+    let popup = common::centered(area, width, lines.len() as u16 + 2);
     frame.render_widget(Clear, popup);
     frame.render_widget(
         Paragraph::new(lines)

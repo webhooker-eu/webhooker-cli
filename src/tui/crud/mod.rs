@@ -14,6 +14,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use crate::tui::action::Effect;
 use crate::tui::action::{Mutation, Request};
 use crate::tui::app::App;
+use crate::tui::app::{Confirm, ConfirmAction, TypedName};
 use crate::tui::app::{FormPurpose, ModalForm};
 use crate::tui::budget::Priority;
 use crate::tui::editor::EditOutcome;
@@ -21,6 +22,7 @@ use crate::tui::forms::form::FieldKind;
 use crate::tui::forms::form::Form;
 use crate::tui::model::{Connection, Destination, Source};
 use crate::tui::screen::{Screen, SourceTab};
+use crate::tui::status;
 use crate::tui::theme::Tone;
 use validation::FieldError;
 
@@ -109,7 +111,6 @@ enum Target {
     Destination(Destination),
     /// A connection; `full` is `None` on the source's Connections tab, which
     /// only has the embedded summary.
-    #[allow(dead_code)]
     Connection {
         id: String,
         enabled: bool,
@@ -376,9 +377,207 @@ pub fn handle_key(app: &mut App, code: KeyCode) -> Option<Vec<Effect>> {
     let effects = match code {
         KeyCode::Char('n') => open_create(app),
         KeyCode::Char('e') => open_edit(app),
+        KeyCode::Char('P') => ask_toggle_status(app),
+        KeyCode::Char('E') => ask_toggle_connection(app),
+        KeyCode::Char('T') => ask_rotate(app),
+        KeyCode::Char('D') => ask_delete(app),
         _ => return None,
     };
     Some(effects)
+}
+
+fn ask_toggle_status(app: &mut App) -> Vec<Effect> {
+    let (id, name, current, is_source) = match target(app) {
+        Some(Target::Source(source)) => (source.id, source.name, source.status, true),
+        Some(Target::Destination(destination)) => {
+            (destination.id, destination.name, destination.status, false)
+        }
+        _ => return Vec::new(),
+    };
+    // An unknown status offers no action.
+    let Some(next) = status::toggled_status(&current) else {
+        return Vec::new();
+    };
+    let verb = if next == "paused" {
+        "Pause "
+    } else {
+        "Resume "
+    };
+    let action = if is_source {
+        ConfirmAction::SetSourceStatus {
+            id,
+            status: next.to_string(),
+        }
+    } else {
+        ConfirmAction::SetDestinationStatus {
+            id,
+            status: next.to_string(),
+        }
+    };
+    app.confirm = Some(Confirm::about(verb, name, "?", action));
+    Vec::new()
+}
+
+fn ask_toggle_connection(app: &mut App) -> Vec<Effect> {
+    let Some(Target::Connection { id, enabled, .. }) = target(app) else {
+        return Vec::new();
+    };
+    let verb = if enabled {
+        "Disable the connection "
+    } else {
+        "Enable the connection "
+    };
+    let label = connection_label(app, &id);
+    app.confirm = Some(Confirm::about(
+        verb,
+        label,
+        "?",
+        ConfirmAction::SetConnectionEnabled {
+            id,
+            enabled: !enabled,
+        },
+    ));
+    Vec::new()
+}
+
+fn ask_rotate(app: &mut App) -> Vec<Effect> {
+    let Some(Target::Source(source)) = target(app) else {
+        return Vec::new();
+    };
+    app.confirm = Some(Confirm::about(
+        "Rotate the ingest token of ",
+        source.name,
+        "? The old URL stops working within ~30 s.",
+        ConfirmAction::RotateSourceToken { id: source.id },
+    ));
+    Vec::new()
+}
+
+fn ask_delete(app: &mut App) -> Vec<Effect> {
+    let confirm = match target(app) {
+        Some(Target::Source(source)) => Confirm {
+            typed_name: Some(TypedName::new(source.name.clone())),
+            ..Confirm::about(
+                "Move ",
+                source.name,
+                " to the trash?",
+                ConfirmAction::DeleteSource { id: source.id },
+            )
+        },
+        Some(Target::Destination(destination)) => Confirm {
+            typed_name: Some(TypedName::new(destination.name.clone())),
+            ..Confirm::about(
+                "Delete ",
+                destination.name,
+                "?",
+                ConfirmAction::DeleteDestination { id: destination.id },
+            )
+        },
+        Some(Target::Connection { id, .. }) => {
+            let label = connection_label(app, &id);
+            Confirm::about(
+                "Delete the connection ",
+                label,
+                "?",
+                ConfirmAction::DeleteConnection { id },
+            )
+        }
+        None => return Vec::new(),
+    };
+    app.confirm = Some(confirm);
+    Vec::new()
+}
+
+fn connection_label(app: &App, id: &str) -> String {
+    let ends = app
+        .data
+        .connections
+        .value
+        .iter()
+        .flatten()
+        .chain(app.data.connection.value.iter())
+        .find(|connection| connection.id == id)
+        .map(|connection| {
+            (
+                connection.source_id.clone(),
+                connection.destination_id.clone(),
+            )
+        })
+        .or_else(|| {
+            app.data
+                .source_connections
+                .value
+                .iter()
+                .flatten()
+                .find(|connection| connection.id == id)
+                .map(|connection| {
+                    (
+                        connection.source_id.clone(),
+                        connection.destination_id.clone(),
+                    )
+                })
+        });
+    match ends {
+        Some((source_id, destination_id)) => format!(
+            "{} {} {}",
+            app.names.source(&source_id),
+            app.theme.glyphs.arrow,
+            app.names.destination(&destination_id)
+        ),
+        None => crate::tui::names::short_id(id),
+    }
+}
+
+/// Runs a confirmed CRUD action; called from `keys::confirmed`.
+pub fn confirmed(_app: &mut App, action: ConfirmAction) -> Vec<Effect> {
+    let mutation = match action {
+        ConfirmAction::SetSourceStatus { id, status } => Mutation::UpdateSource {
+            id,
+            body: serde_json::json!({"status": status}),
+        },
+        ConfirmAction::SetDestinationStatus { id, status } => Mutation::UpdateDestination {
+            id,
+            body: serde_json::json!({"status": status}),
+        },
+        ConfirmAction::SetConnectionEnabled { id, enabled } => Mutation::UpdateConnection {
+            id,
+            body: serde_json::json!({"enabled": enabled}),
+        },
+        ConfirmAction::RotateSourceToken { id } => Mutation::RotateSourceToken { id },
+        ConfirmAction::DeleteSource { id } => Mutation::DeleteSource { id },
+        ConfirmAction::DeleteDestination { id } => Mutation::DeleteDestination { id },
+        ConfirmAction::DeleteConnection { id } => Mutation::DeleteConnection { id },
+        _ => return Vec::new(),
+    };
+    vec![Effect::Mutate { mutation }]
+}
+
+/// Keys while a typed-name confirm is open. See the rules at the top of
+/// this task.
+pub fn on_typed_confirm_key(app: &mut App, key: KeyEvent) -> Vec<Effect> {
+    let Some(mut confirm) = app.confirm.take() else {
+        return Vec::new();
+    };
+    let Some(typed) = confirm.typed_name.as_mut() else {
+        app.confirm = Some(confirm);
+        return Vec::new();
+    };
+    match key.code {
+        KeyCode::Esc => Vec::new(),
+        KeyCode::Enter if typed.matches() => confirmed(app, confirm.action),
+        KeyCode::Enter => {
+            typed.mismatch = true;
+            app.confirm = Some(confirm);
+            Vec::new()
+        }
+        _ => {
+            if typed.input.handle(key) {
+                typed.mismatch = false;
+            }
+            app.confirm = Some(confirm);
+            Vec::new()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -631,5 +830,183 @@ mod tests {
         assert!(submit(&mut app).is_empty());
         assert!(app.modal.is_none());
         assert_eq!(app.toasts.last().unwrap().text, "No changes to save");
+    }
+
+    fn chars(app: &mut crate::tui::app::App, text: &str) {
+        for character in text.chars() {
+            press(app, KeyCode::Char(character));
+        }
+    }
+
+    #[test]
+    fn p_asks_before_pausing_and_y_sends_the_patch() {
+        let mut app = fixtures::app();
+        assert!(press(&mut app, KeyCode::Char('P')).is_empty());
+        assert_eq!(app.confirm.as_ref().unwrap().text(), "Pause stripe-prod?");
+        let effects = press(&mut app, KeyCode::Char('y'));
+        assert_eq!(
+            mutations(&effects),
+            vec![Mutation::UpdateSource {
+                id: fixtures::STRIPE_ID.into(),
+                body: json!({"status": "paused"})
+            }]
+        );
+    }
+
+    #[test]
+    fn p_resumes_a_paused_source_and_ignores_unknown_statuses() {
+        let mut app = fixtures::app();
+        press(&mut app, KeyCode::End);
+        press(&mut app, KeyCode::Char('P'));
+        assert_eq!(app.confirm.as_ref().unwrap().text(), "Resume shopify-old?");
+        let mut app = fixtures::app();
+        app.data.sources.value.as_mut().unwrap()[0].status = "archived".into();
+        press(&mut app, KeyCode::Char('P'));
+        assert!(app.confirm.is_none());
+    }
+
+    #[test]
+    fn e_toggles_a_connection_and_t_rotates_a_token() {
+        let mut app = fixtures::source_detail(SourceTab::Connections);
+        press(&mut app, KeyCode::Char('E'));
+        assert_eq!(
+            app.confirm.as_ref().unwrap().text(),
+            "Disable the connection stripe-prod → billing-worker?"
+        );
+        assert_eq!(
+            mutations(&press(&mut app, KeyCode::Char('y'))),
+            vec![Mutation::UpdateConnection {
+                id: fixtures::STRIPE_BILLING_ID.into(),
+                body: json!({"enabled": false})
+            }]
+        );
+        let mut app = fixtures::source_detail(SourceTab::Overview);
+        press(&mut app, KeyCode::Char('T'));
+        assert_eq!(
+            app.confirm.as_ref().unwrap().text(),
+            "Rotate the ingest token of stripe-prod? The old URL stops working within ~30 s."
+        );
+        assert_eq!(
+            mutations(&press(&mut app, KeyCode::Char('y'))),
+            vec![Mutation::RotateSourceToken {
+                id: fixtures::STRIPE_ID.into()
+            }]
+        );
+    }
+
+    #[test]
+    fn deleting_a_source_requires_typing_its_name() {
+        let mut app = fixtures::app();
+        press(&mut app, KeyCode::Char('D'));
+        let confirm = app.confirm.as_ref().unwrap();
+        assert_eq!(confirm.text(), "Move stripe-prod to the trash?");
+        assert!(confirm.typed_name.is_some());
+        assert!(
+            press(&mut app, KeyCode::Char('y')).is_empty(),
+            "y is input here"
+        );
+        assert!(
+            press(&mut app, KeyCode::Enter).is_empty(),
+            "\"y\" is not the name"
+        );
+        assert!(
+            app.confirm
+                .as_ref()
+                .unwrap()
+                .typed_name
+                .as_ref()
+                .unwrap()
+                .mismatch
+        );
+        update(
+            &mut app,
+            Action::Key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL)),
+        );
+        chars(&mut app, "Stripe-prod");
+        assert!(press(&mut app, KeyCode::Enter).is_empty(), "case matters");
+        update(
+            &mut app,
+            Action::Key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL)),
+        );
+        chars(&mut app, "stripe-prod ");
+        assert_eq!(
+            mutations(&press(&mut app, KeyCode::Enter)),
+            vec![Mutation::DeleteSource {
+                id: fixtures::STRIPE_ID.into()
+            }]
+        );
+        assert!(app.confirm.is_none());
+    }
+
+    #[test]
+    fn esc_cancels_a_typed_confirm() {
+        let mut app = fixtures::destination_detail();
+        press(&mut app, KeyCode::Char('D'));
+        assert_eq!(
+            app.confirm.as_ref().unwrap().text(),
+            "Delete billing-worker?"
+        );
+        press(&mut app, KeyCode::Esc);
+        assert!(app.confirm.is_none());
+    }
+
+    #[test]
+    fn deleting_a_connection_is_a_plain_confirm() {
+        let mut app = fixtures::connection_detail();
+        press(&mut app, KeyCode::Char('D'));
+        assert!(app.confirm.as_ref().unwrap().typed_name.is_none());
+        assert!(press(&mut app, KeyCode::Enter).is_empty());
+        assert!(app.confirm.is_none(), "enter cancels a plain confirm");
+    }
+
+    #[test]
+    fn no_key_sends_a_mutation_without_a_confirmation_or_a_save() {
+        let screens = [
+            fixtures::app(),
+            fixtures::source_detail(SourceTab::Overview),
+            fixtures::source_detail(SourceTab::Connections),
+            {
+                let mut app = fixtures::app();
+                app.screen = Screen::Destinations;
+                app
+            },
+            fixtures::destination_detail(),
+            {
+                let mut app = fixtures::app();
+                app.screen = Screen::Connections;
+                app
+            },
+            fixtures::connection_detail(),
+        ];
+        for base in screens {
+            for letter in ('A'..='Z').chain('a'..='z').chain(['/', '?', ' ']) {
+                let mut app = clone_app(&base);
+                let effects = press(&mut app, KeyCode::Char(letter));
+                assert!(
+                    mutations(&effects).is_empty(),
+                    "{letter:?} on {:?} sent a mutation",
+                    base.screen
+                );
+                for follow in [KeyCode::Char('n'), KeyCode::Esc, KeyCode::Enter] {
+                    let mut probe = clone_app(&app);
+                    assert!(mutations(&press(&mut probe, follow)).is_empty());
+                }
+            }
+        }
+    }
+
+    /// Fixtures are cheap to rebuild; this re-creates the same screen state.
+    fn clone_app(app: &crate::tui::app::App) -> crate::tui::app::App {
+        let mut copy = match &app.screen {
+            Screen::SourceDetail { tab, .. } => fixtures::source_detail(*tab),
+            Screen::DestinationDetail { .. } => fixtures::destination_detail(),
+            Screen::ConnectionDetail { .. } => fixtures::connection_detail(),
+            _ => fixtures::app(),
+        };
+        copy.screen = app.screen.clone();
+        copy.confirm = app.confirm.clone();
+        copy.modal = app.modal.clone();
+        copy.focus = app.focus;
+        copy
     }
 }

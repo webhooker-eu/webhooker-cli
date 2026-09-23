@@ -24,6 +24,13 @@ pub fn handle(app: &mut App, key: KeyEvent) -> Vec<Effect> {
         app.request_quit();
         return Vec::new();
     }
+    if app
+        .confirm
+        .as_ref()
+        .is_some_and(|confirm| confirm.typed_name.is_some())
+    {
+        return crate::tui::crud::on_typed_confirm_key(app, key);
+    }
     if let Some(confirm) = app.confirm.take() {
         return on_confirm_key(app, confirm, key.code);
     }
@@ -518,6 +525,13 @@ fn confirmed(app: &mut App, action: ConfirmAction) -> Vec<Effect> {
             app.quit = true;
             vec![Effect::StopRelay]
         }
+        action @ (ConfirmAction::SetSourceStatus { .. }
+        | ConfirmAction::SetDestinationStatus { .. }
+        | ConfirmAction::SetConnectionEnabled { .. }
+        | ConfirmAction::RotateSourceToken { .. }
+        | ConfirmAction::DeleteSource { .. }
+        | ConfirmAction::DeleteDestination { .. }
+        | ConfirmAction::DeleteConnection { .. }) => crate::tui::crud::confirmed(app, action),
     }
 }
 

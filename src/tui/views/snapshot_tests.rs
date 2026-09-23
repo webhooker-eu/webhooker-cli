@@ -729,3 +729,26 @@ fn targets_are_shortened_for_the_header() {
     );
     assert_eq!(short_target("http://localhost"), ":80");
 }
+
+#[test]
+fn typed_name_confirm() {
+    use crate::tui::app::{ConfirmAction, TypedName};
+    let mut app = fixtures::app();
+    let mut typed = TypedName::new("stripe-prod");
+    typed.input.set("stripe");
+    app.confirm = Some(Confirm {
+        typed_name: Some(typed),
+        ..Confirm::about(
+            "Move ",
+            "stripe-prod",
+            " to the trash?",
+            ConfirmAction::DeleteSource {
+                id: fixtures::STRIPE_ID.into(),
+            },
+        )
+    });
+    snapshot_both_sizes("confirm_typed_name", &app);
+    let text = screen_text(&app, 80, 24);
+    assert!(text.contains("Type stripe-prod to confirm:"));
+    assert!(text.contains("> stripe"));
+}
