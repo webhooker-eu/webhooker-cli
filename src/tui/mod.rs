@@ -11,6 +11,7 @@ pub mod keys_events;
 pub mod model;
 pub mod names;
 pub mod poller;
+pub mod relay_control;
 pub mod relay_session;
 pub mod screen;
 pub mod settings;
@@ -89,6 +90,7 @@ pub async fn run(options: LaunchOptions) -> Result<()> {
         size,
         now: Instant::now(),
         wall_clock: chrono::Utc::now(),
+        last_relay_url: options.ui.state.last_relay_url.clone(),
     });
     let client = options
         .api_key

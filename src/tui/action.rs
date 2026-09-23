@@ -17,6 +17,7 @@ use crate::tui::events_state::{
     StatsRange, TimeWindow,
 };
 use crate::tui::model::{Me, TailNotice};
+use crate::tui::relay_session::RelayUpdate;
 
 /// Generation of fetches that belong to no screen (workspace, plans); their
 /// results are never dropped. Screen generations start at 1.
@@ -228,6 +229,11 @@ pub enum Action {
     },
     LoginFinished(Result<LoginSuccess, String>),
     SettingsSaved(Result<(), String>),
+    /// From the relay task of session `session`; older sessions are ignored.
+    Relay {
+        session: u64,
+        update: RelayUpdate,
+    },
     /// SIGTERM, SIGHUP or the console window closing.
     Terminate,
     /// DELETE success carries `Value::Null`.

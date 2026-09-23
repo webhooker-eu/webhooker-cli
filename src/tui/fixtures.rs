@@ -9,6 +9,7 @@ use serde_json::json;
 use crate::relay::{ForwardedResponse, RelayOutcome, RelayRecord, WebhookFrame};
 use crate::tui::app::{App, AppInit, Focus, KeySource};
 use crate::tui::model::{Connection, Destination, Source, SourceConnection, Workspace};
+use crate::tui::relay_session::{RelayConnection, RelayState};
 use crate::tui::screen::{Screen, SourceTab};
 use crate::tui::settings::{TimeFormat, UiSettings};
 use crate::tui::theme::TerminalEnv;
@@ -48,6 +49,7 @@ pub fn init(has_key: bool) -> AppInit {
         size: (120, 40),
         now: Instant::now(),
         wall_clock: Utc.with_ymd_and_hms(2026, 9, 23, 12, 0, 0).unwrap(),
+        last_relay_url: None,
     }
 }
 
@@ -631,4 +633,39 @@ pub fn relay_record(public_id: &str, received_at: &str, outcome: RelayOutcome) -
         target_url: "http://localhost:3000".into(),
         outcome,
     }
+}
+
+/// The spec's inspector mockup: a live session to localhost:3000 with three
+/// records, the 500 selected.
+pub fn relay_app() -> App {
+    let mut app = app();
+    app.screen = Screen::Relay;
+    app.cursors.sidebar = 6;
+    let mut relay = RelayState::new(
+        1,
+        STRIPE_ID.into(),
+        "stripe-prod".into(),
+        "http://localhost:3000".into(),
+        vec![],
+    );
+    relay.connection = RelayConnection::Connected;
+    relay.push(relay_record(
+        "evt_1b9e27a0c3",
+        "2026-09-23T12:03:58Z",
+        RelayOutcome::Failed("connection refused".into()),
+    ));
+    relay.push(relay_record(
+        "evt_77c1d05e9a",
+        "2026-09-23T12:04:09Z",
+        forwarded(500, 120, "{\"error\":\"db timeout\"}"),
+    ));
+    relay.push(relay_record(
+        "evt_8f2a91c4d2",
+        "2026-09-23T12:04:11Z",
+        forwarded(200, 34, "ok"),
+    ));
+    relay.cursor = 1;
+    app.relay = Some(relay);
+    app.next_relay_session = 1;
+    app
 }

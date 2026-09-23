@@ -23,6 +23,7 @@ use crate::tui::model::{
 };
 use crate::tui::names::NameCache;
 use crate::tui::poller::{self, PlanTier, Poller};
+use crate::tui::relay_session::RelayState;
 use crate::tui::screen::{Screen, Section, SourceTab};
 use crate::tui::settings::{StartScreen, UiSettings};
 use crate::tui::theme::{TerminalEnv, Theme, Tone};
@@ -261,6 +262,7 @@ pub struct AppInit {
     pub size: (u16, u16),
     pub now: Instant,
     pub wall_clock: DateTime<Utc>,
+    pub last_relay_url: Option<String>,
 }
 
 pub struct App {
@@ -292,6 +294,11 @@ pub struct App {
     pub settings_form: Option<SettingsForm>,
     /// Settings waiting for their write to succeed before they apply.
     pub pending_settings: Option<UiSettings>,
+    /// The one relay session; it survives screen changes.
+    pub relay: Option<RelayState>,
+    pub next_relay_session: u64,
+    /// Prefills the relay form; from `[ui.state]`, updated on every start.
+    pub last_relay_url: Option<String>,
     /// State of the Events, Live, event detail, DLQ and Stats screens.
     pub event_screens: EventScreens,
     /// Scroll offset of the text pane on detail screens.
@@ -341,6 +348,9 @@ impl App {
             login: LoginForm::for_server(&init.server),
             settings_form: None,
             pending_settings: None,
+            relay: None,
+            next_relay_session: 0,
+            last_relay_url: init.last_relay_url,
             event_screens: EventScreens::default(),
             scroll: 0,
             scroll_limit: Cell::new(u16::MAX),
@@ -823,6 +833,9 @@ pub fn update(app: &mut App, action: Action) -> Vec<Effect> {
             subscription,
             status,
         } => crate::tui::streams::on_status(app, subscription, status),
+        Action::Relay { session, update } => {
+            crate::tui::relay_control::on_update(app, session, update)
+        }
         Action::Terminate => {
             app.quit = true;
             Vec::new()

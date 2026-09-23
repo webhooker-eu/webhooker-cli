@@ -3,7 +3,8 @@
 
 use std::collections::VecDeque;
 
-use crate::relay::{body_bytes, RelayOutcome, RelayRecord};
+use crate::relay::{body_bytes, RelayEvent, RelayOutcome, RelayRecord};
+use crate::sse::StreamStatus;
 use crate::tui::forms::input::TextInput;
 
 /// The inspector keeps the last 500 records.
@@ -102,6 +103,17 @@ impl RelayState {
     pub fn selected(&self) -> Option<&RelayRecord> {
         self.visible().get(self.cursor).copied()
     }
+}
+
+/// What a relay task reports back to the app.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RelayUpdate {
+    Status(StreamStatus),
+    Event(RelayEvent),
+    /// The result of `p`: a request re-sent to localhost from memory.
+    Replayed(RelayRecord),
+    /// The task ended; `Some` carries the fatal stream error.
+    Ended(Option<String>),
 }
 
 fn matches_query(record: &RelayRecord, needle: &str) -> bool {
