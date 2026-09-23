@@ -13,7 +13,7 @@ use crate::client::ApiClient;
 use crate::sse::{self, StreamStatus};
 
 /// A frame of the server's live event stream.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct WebhookFrame {
     pub id: String,
     pub public_id: String,
@@ -151,7 +151,7 @@ async fn read_capped(response: &mut reqwest::Response, limit: usize) -> (Vec<u8>
 pub const FORWARD_QUEUE_CAPACITY: usize = 256;
 
 /// What happened to one frame.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum RelayOutcome {
     Forwarded(ForwardedResponse),
     SkippedUnverified,
@@ -160,7 +160,7 @@ pub enum RelayOutcome {
     Dropped,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RelayRecord {
     pub frame: Arc<WebhookFrame>,
     /// The target the frame was sent to (or would have been, for drops).
@@ -168,7 +168,7 @@ pub struct RelayRecord {
     pub outcome: RelayOutcome,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum RelayEvent {
     Record(RelayRecord),
     MalformedFrame(String),
@@ -592,5 +592,19 @@ pub(crate) mod tests {
             records[0].outcome,
             RelayOutcome::SkippedUnverified
         ));
+    }
+
+    #[test]
+    fn relay_records_compare_by_value() {
+        let record = RelayRecord {
+            frame: std::sync::Arc::new(frame("{}")),
+            target_url: "http://localhost:3000".into(),
+            outcome: RelayOutcome::Dropped,
+        };
+        assert_eq!(record.clone(), record);
+        assert_eq!(
+            RelayEvent::MalformedFrame("x".into()),
+            RelayEvent::MalformedFrame("x".into())
+        );
     }
 }
