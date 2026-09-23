@@ -231,7 +231,7 @@ pub async fn run(
             }
             Err(error) => eprintln!("  malformed frame skipped: {error}"),
         }
-    })
+    }, sse::print_status)
     .await;
     drop(sender);
     let _ = forward_task.await;

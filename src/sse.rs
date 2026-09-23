@@ -140,26 +140,79 @@ pub fn action_for_status(status: u16) -> StreamAction {
     }
 }
 
+/// Connection state of a stream, reported instead of printed so the TUI can
+/// show it in its status line.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StreamStatus {
+    Connected,
+    Reconnecting {
+        reason: String,
+        retry_in: Duration,
+        /// The API's own `error.message` when the refusal carried one.
+        server_message: Option<String>,
+    },
+    Fatal(String),
+}
+
+/// The CLI's reporting: reconnects go to stderr exactly as before, everything
+/// else is already visible through the command's own output or error.
+pub fn print_status(status: StreamStatus) {
+    if let StreamStatus::Reconnecting {
+        reason, retry_in, ..
+    } = status
+    {
+        eprintln!("  reconnecting… ({reason})  retry in {retry_in:?}");
+    }
+}
+
+async fn envelope_message(response: reqwest::Response) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct Envelope {
+        error: Detail,
+    }
+    #[derive(serde::Deserialize)]
+    struct Detail {
+        message: String,
+    }
+    let body = response.text().await.ok()?;
+    serde_json::from_str::<Envelope>(&body)
+        .ok()
+        .map(|envelope| envelope.error.message)
+}
+
 /// Connects to an SSE endpoint and invokes `on_event` per parsed event,
-/// reconnecting with exponential backoff on stream drops.
+/// reconnecting with exponential backoff on stream drops. Connection changes
+/// go to `on_status`; the CLI passes [`print_status`].
 pub async fn run_stream(
     client: &ApiClient,
     path: &str,
     mut on_event: impl FnMut(SseEvent),
+    mut on_status: impl FnMut(StreamStatus),
 ) -> Result<()> {
     let mut backoff = INITIAL_BACKOFF;
     loop {
-        let reason = match client.request(path).send().await {
-            Err(error) => format!("connection failed ({error})"),
+        let (reason, server_message) = match client.request(path).send().await {
+            Err(error) => (format!("connection failed ({error})"), None),
             Ok(response) => match action_for_status(response.status().as_u16()) {
-                StreamAction::Fatal(message) => bail!("{message}"),
-                StreamAction::Retry(message) => message,
+                StreamAction::Fatal(message) => {
+                    on_status(StreamStatus::Fatal(message.clone()));
+                    bail!("{message}")
+                }
+                StreamAction::Retry(message) => (message, envelope_message(response).await),
                 StreamAction::Proceed => {
-                    consume_stream(response, &mut on_event, &mut backoff).await
+                    on_status(StreamStatus::Connected);
+                    (
+                        consume_stream(response, &mut on_event, &mut backoff).await,
+                        None,
+                    )
                 }
             },
         };
-        eprintln!("  reconnecting… ({reason})  retry in {backoff:?}");
+        on_status(StreamStatus::Reconnecting {
+            reason,
+            retry_in: backoff,
+            server_message,
+        });
         tokio::time::sleep(backoff).await;
         backoff = (backoff * 2).min(MAX_BACKOFF);
     }
@@ -222,9 +275,14 @@ mod tests {
         .await;
 
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-        let stream = run_stream(&client, "/stream", move |event| {
-            let _ = sender.send(event);
-        });
+        let stream = run_stream(
+            &client,
+            "/stream",
+            move |event| {
+                let _ = sender.send(event);
+            },
+            |_| {},
+        );
         tokio::pin!(stream);
 
         let mut delivered = Vec::new();
@@ -243,12 +301,16 @@ mod tests {
     async fn run_stream_aborts_on_401_and_404() {
         let unauthorized = MockServer::start().await;
         let client = mount_stream(&unauthorized, ResponseTemplate::new(401)).await;
-        let error = run_stream(&client, "/stream", |_| {}).await.unwrap_err();
+        let error = run_stream(&client, "/stream", |_| {}, |_| {})
+            .await
+            .unwrap_err();
         assert!(error.to_string().contains("rejected"), "{error}");
 
         let missing = MockServer::start().await;
         let client = mount_stream(&missing, ResponseTemplate::new(404)).await;
-        let error = run_stream(&client, "/stream", |_| {}).await.unwrap_err();
+        let error = run_stream(&client, "/stream", |_| {}, |_| {})
+            .await
+            .unwrap_err();
         assert!(error.to_string().contains("not found"), "{error}");
     }
 
@@ -260,7 +322,7 @@ mod tests {
         let client = mount_stream(&server, ResponseTemplate::new(403)).await;
         let outcome = tokio::time::timeout(
             Duration::from_millis(200),
-            run_stream(&client, "/stream", |_| {}),
+            run_stream(&client, "/stream", |_| {}, |_| {}),
         )
         .await;
         assert!(outcome.is_err(), "run_stream returned instead of retrying");
@@ -388,5 +450,78 @@ mod tests {
         let events = parser.feed(b"data: z\r\r");
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].data, "y");
+    }
+
+    async fn collect_statuses(client: &ApiClient, window: Duration) -> Vec<StreamStatus> {
+        let statuses = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = statuses.clone();
+        let _ = tokio::time::timeout(
+            window,
+            run_stream(
+                client,
+                "/stream",
+                |_| {},
+                move |status| recorded.lock().unwrap().push(status),
+            ),
+        )
+        .await;
+        let collected = statuses.lock().unwrap().clone();
+        collected
+    }
+
+    #[tokio::test]
+    async fn connected_is_reported_before_the_stream_closes() {
+        let server = MockServer::start().await;
+        let client = mount_stream(&server, event_stream("data: x\n\n")).await;
+        let statuses = collect_statuses(&client, Duration::from_millis(300)).await;
+        assert_eq!(statuses[0], StreamStatus::Connected);
+        assert!(matches!(
+            &statuses[1],
+            StreamStatus::Reconnecting { reason, retry_in, .. }
+                if reason == "stream closed" && *retry_in == INITIAL_BACKOFF
+        ));
+    }
+
+    #[tokio::test]
+    async fn retryable_statuses_carry_the_server_message() {
+        let server = MockServer::start().await;
+        let client = mount_stream(
+            &server,
+            ResponseTemplate::new(403).set_body_json(serde_json::json!({
+                "error": {
+                    "code": "plan_limit_exceeded",
+                    "message": "live stream limit reached for your plan (3)"
+                }
+            })),
+        )
+        .await;
+        let statuses = collect_statuses(&client, Duration::from_millis(300)).await;
+        let StreamStatus::Reconnecting {
+            reason,
+            server_message,
+            ..
+        } = &statuses[0]
+        else {
+            panic!("expected a reconnect, got {statuses:?}");
+        };
+        assert!(reason.contains("no live stream slot"), "{reason}");
+        assert_eq!(
+            server_message.as_deref(),
+            Some("live stream limit reached for your plan (3)")
+        );
+    }
+
+    #[tokio::test]
+    async fn fatal_statuses_are_reported_before_returning() {
+        let server = MockServer::start().await;
+        let client = mount_stream(&server, ResponseTemplate::new(401)).await;
+        let mut statuses = Vec::new();
+        let error = run_stream(&client, "/stream", |_| {}, |status| statuses.push(status))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("rejected"), "{error}");
+        assert!(
+            matches!(&statuses[..], [StreamStatus::Fatal(message)] if message.contains("rejected"))
+        );
     }
 }
