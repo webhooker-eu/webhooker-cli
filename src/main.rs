@@ -1,6 +1,9 @@
+use std::io::IsTerminal;
+
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use whk::commands::{connections, destinations, dlq, events, sources, stats};
+use whk::tui::app::KeySource;
 use whk::{args, client, config, listen, tail};
 
 #[derive(Parser)]
@@ -20,11 +23,13 @@ struct Cli {
     #[arg(long, global = true)]
     json: bool,
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand)]
 enum Command {
+    /// Open the interactive terminal UI (a bare `whk` does the same on a terminal)
+    Ui,
     /// Validate and save an API key
     Login,
     /// Show the authenticated workspace
@@ -384,7 +389,12 @@ async fn main() -> Result<()> {
         command,
     } = Cli::parse();
 
+    let Some(command) = command else {
+        return bare_command(server, api_key, json).await;
+    };
+
     match command {
+        Command::Ui => open_tui(server, api_key).await,
         Command::Login => login(server, api_key).await,
         Command::Logout => logout(),
         Command::Whoami => {
@@ -768,6 +778,62 @@ fn logout() -> Result<()> {
         println!("No saved credentials at {}", path.display());
     }
     Ok(())
+}
+
+/// A bare `whk` opens the TUI on an interactive terminal; everywhere else
+/// (pipes, `--json`, `WHK_NO_TUI`, `ui.open_on_bare_command = false`) it
+/// prints help and exits with 2, as clap does for a missing subcommand.
+async fn bare_command(server: Option<String>, api_key: Option<String>, json: bool) -> Result<()> {
+    let saved_ui = config::default_path()
+        .ok()
+        .and_then(|path| config::load(&path).ok().flatten())
+        .map(|config| config.ui);
+    let context = whk::tui::BareCommandContext {
+        stdin_is_terminal: std::io::stdin().is_terminal(),
+        stdout_is_terminal: std::io::stdout().is_terminal(),
+        json,
+        no_tui_env: std::env::var("WHK_NO_TUI").ok(),
+        open_on_bare_command: saved_ui.and_then(|ui| ui.open_on_bare_command),
+    };
+    if whk::tui::bare_command_opens_tui(&context) {
+        return open_tui(server, api_key).await;
+    }
+    Cli::command()
+        .error(
+            clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand,
+            "a subcommand is required",
+        )
+        .exit()
+}
+
+async fn open_tui(server: Option<String>, api_key: Option<String>) -> Result<()> {
+    if !whk::tui::attached_to_terminal() {
+        anyhow::bail!(
+            "whk ui needs an interactive terminal; in scripts use the subcommands (see `whk --help`)"
+        );
+    }
+    let config_path = config::default_path()?;
+    let saved = config::load(&config_path)?;
+    let key_source = if api_key.is_some() {
+        KeySource::Override
+    } else {
+        KeySource::Config
+    };
+    let server = config::resolve_server(server, saved.as_ref());
+    let api_key = api_key.or_else(|| {
+        saved
+            .as_ref()
+            .map(|config| config.api_key.clone())
+            .filter(|key| !key.is_empty())
+    });
+    whk::tui::run(whk::tui::LaunchOptions {
+        server,
+        api_key,
+        key_source,
+        config_path,
+        ui: saved.map(|config| config.ui).unwrap_or_default(),
+    })
+    .await
 }
 
 fn connect(server: &Option<String>, api_key: &Option<String>) -> Result<client::ApiClient> {

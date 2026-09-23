@@ -262,3 +262,41 @@ async fn stats_by_source_prints_the_volume_table() {
         "NAME         EVENTS  SOURCE ID\nstripe-prod  12      s1\n"
     );
 }
+
+#[tokio::test]
+async fn a_bare_whk_without_a_tty_prints_help_and_exits_2() {
+    let output = run_whk("http://127.0.0.1:9", &[], None).await;
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        stderr_of(&output).contains("Usage:"),
+        "{}",
+        stderr_of(&output)
+    );
+    assert!(stdout_of(&output).is_empty());
+}
+
+#[tokio::test]
+async fn whk_no_tui_keeps_the_help_behavior() {
+    let config_home = tempfile::tempdir().unwrap();
+    let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_whk"))
+        .env("WHK_NO_TUI", "1")
+        .env("HOME", config_home.path())
+        .env("XDG_CONFIG_HOME", config_home.path())
+        .env("APPDATA", config_home.path())
+        .stdin(Stdio::null())
+        .output()
+        .await
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+}
+
+#[tokio::test]
+async fn whk_ui_without_a_tty_fails_with_a_clear_message() {
+    let output = run_whk("http://127.0.0.1:9", &["ui"], None).await;
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr_of(&output).contains("whk ui needs an interactive terminal"),
+        "{}",
+        stderr_of(&output)
+    );
+}
