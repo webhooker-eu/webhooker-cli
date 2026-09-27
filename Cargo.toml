@@ -27,7 +27,7 @@ tokio = { version = "1", features = ["full"] }
 toml = "0.8"
 
 [dev-dependencies]
-insta = "1"
+insta = { version = "1", features = ["filters"] }
 wiremock = "0.6"
 
 [profile.release]

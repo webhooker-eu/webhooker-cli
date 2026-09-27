@@ -2,7 +2,7 @@
 source: src/tui/views/snapshot_tests.rs
 expression: "draw(&ascii_app, 80, 24).backend()"
 ---
-"  |  | |_| |/   Webhooker CLI v0.1.0                                            "
+"  |  | |_| |/   Webhooker CLI v[version] "
 "  |/\| | | |\   acme | pro | app.webhooker.eu                                   "
 " Sources Dests Conns Events DLQ Stats Relay Settings                            "
 "+ Sources ---------------------------------------------------------------------+"

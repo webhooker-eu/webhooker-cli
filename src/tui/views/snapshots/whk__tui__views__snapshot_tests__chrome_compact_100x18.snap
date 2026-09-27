@@ -2,7 +2,7 @@
 source: src/tui/views/snapshot_tests.rs
 expression: "draw(&app, 100, 18).backend()"
 ---
-" Webhooker v0.1.0 · acme · pro                                                                      "
+" Webhooker v[version] · acme · pro                                                                      "
 "┌──────────────┐┌ Stats ⠋ ─────────────────────────────────────────────────────────────────────────┐"
 "│  Sources     ││range  24h   7d   30d                                                             │"
 "│  Destinations││                                                                                  │"

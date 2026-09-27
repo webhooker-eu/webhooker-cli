@@ -2,7 +2,7 @@
 source: src/tui/views/snapshot_tests.rs
 expression: "draw(app, width, height).backend()"
 ---
-"  ▄▀▀▄ █▄ ▄█   Webhooker CLI v0.1.0                                                                                     "
+"  ▄▀▀▄ █▄ ▄█   Webhooker CLI v[version] "
 "  ▀▄▄▀ █ ▀ █   acme · pro · app.webhooker.eu                                                                            "
 "┌──────────────┐┌ DLQ · stripe-prod · exhausted,failed ────────────────────────────────────────────────────────────────┐"
 "│  Sources     ││▸ billing-worker                                                          4 exhausted     1 failed    │"

@@ -3,7 +3,6 @@
 
 use std::time::Duration;
 
-use insta::assert_snapshot;
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
@@ -16,6 +15,22 @@ use crate::tui::screen::Section;
 use crate::tui::screen::SourceTab;
 use crate::tui::settings::ThemeChoice;
 use crate::tui::theme::Tone;
+
+/// The header shows the crate version; masking it keeps a version bump from
+/// invalidating every snapshot.
+macro_rules! assert_version_masked {
+    ($snapshot_macro:ident, $name:expr, $value:expr) => {{
+        let mut settings = insta::Settings::clone_current();
+        settings.add_filter(r"v\d+\.\d+\.\d+ +", "v[version] ");
+        settings.bind(|| insta::$snapshot_macro!($name, $value));
+    }};
+}
+
+macro_rules! assert_snapshot {
+    ($name:expr, $value:expr) => {
+        assert_version_masked!(assert_snapshot, $name, $value)
+    };
+}
 
 pub(super) fn draw(app: &App, width: u16, height: u16) -> Terminal<TestBackend> {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -208,7 +223,8 @@ fn sources_list() {
 #[test]
 fn sources_list_in_every_theme() {
     let dark = fixtures::app();
-    insta::assert_debug_snapshot!(
+    assert_version_masked!(
+        assert_debug_snapshot,
         "sources_dark_styles",
         draw(&dark, 80, 24).backend().buffer()
     );
@@ -217,7 +233,8 @@ fn sources_list_in_every_theme() {
         theme: ThemeChoice::Light,
         ..light.settings.clone()
     });
-    insta::assert_debug_snapshot!(
+    assert_version_masked!(
+        assert_debug_snapshot,
         "sources_light_styles",
         draw(&light, 80, 24).backend().buffer()
     );
