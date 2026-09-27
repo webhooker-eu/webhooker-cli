@@ -11,6 +11,7 @@ $ProgressPreference = 'SilentlyContinue'
 function Install-Whk {
     $repository = 'webhooker-eu/webhooker-cli'
     $archiveName = 'whk-x86_64-pc-windows-msvc.zip'
+    $checksumName = 'whk-x86_64-pc-windows-msvc.sha256'
     $requestedVersion = if ($env:WHK_VERSION) { $env:WHK_VERSION } else { 'latest' }
     $installDirectory = if ($env:WHK_INSTALL_DIR) { $env:WHK_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'Programs\whk' }
 
@@ -29,11 +30,11 @@ function Install-Whk {
 
     try {
         $archivePath = Join-Path $temporaryDirectory $archiveName
-        $checksumPath = "$archivePath.sha256"
+        $checksumPath = Join-Path $temporaryDirectory $checksumName
 
         Write-Host "Downloading $archiveName ($requestedVersion)"
         Invoke-WebRequest -UseBasicParsing -Uri "$releaseUrl/$archiveName" -OutFile $archivePath
-        Invoke-WebRequest -UseBasicParsing -Uri "$releaseUrl/$archiveName.sha256" -OutFile $checksumPath
+        Invoke-WebRequest -UseBasicParsing -Uri "$releaseUrl/$checksumName" -OutFile $checksumPath
 
         $expectedChecksum = ((Get-Content -Raw $checksumPath).Trim() -split '\s+')[0].ToLowerInvariant()
         $actualChecksum = (Get-FileHash -Algorithm SHA256 $archivePath).Hash.ToLowerInvariant()
