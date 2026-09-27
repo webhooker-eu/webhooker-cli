@@ -41,11 +41,12 @@ fn json_line(frame: &WebhookFrame, outcome: &RelayOutcome) -> String {
     record.to_string()
 }
 
+/// The response arrow sits under the request arrow, so each pair reads as one.
 fn forwarded_line(frame: &WebhookFrame, response: &ForwardedResponse) -> String {
+    let request_prefix = format!("  {} {} ", frame.received_at, frame.method);
+    let arrow_indent = " ".repeat(request_prefix.chars().count());
     format!(
-        "  {} {} ← {} ({}, {})\n           → {} in {}ms",
-        frame.received_at,
-        frame.method,
+        "{request_prefix}← {} ({}, {})\n{arrow_indent}→ {} in {}ms",
         frame.public_id,
         frame.content_type.as_deref().unwrap_or("-"),
         body_size_label(frame),
@@ -178,13 +179,13 @@ mod tests {
     }
 
     #[test]
-    fn forwarded_text_line_is_unchanged() {
+    fn forwarded_text_line_aligns_response_under_request_arrow() {
         let RelayOutcome::Forwarded(response) = forwarded(200, 12) else {
             unreachable!()
         };
         assert_eq!(
             forwarded_line(&frame("{}"), &response),
-            "  2026-07-16T12:04:31Z POST ← evt_testtesttest01 (application/json, 0.0 KB)\n           → 200 in 12ms"
+            "  2026-07-16T12:04:31Z POST ← evt_testtesttest01 (application/json, 0.0 KB)\n                            → 200 in 12ms"
         );
     }
 }

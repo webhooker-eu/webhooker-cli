@@ -155,7 +155,7 @@ whk listen stripe-test --forward http://localhost:3000/webhooks/stripe
 ```
   Forwarding "stripe-test" → http://localhost:3000/webhooks/stripe  (Ctrl-C to stop)
   2026-09-23T10:15:02Z POST ← evt_9rMz7kQpXa2FbtW (application/json, 2.4 KB)
-           → 200 in 14ms
+                            → 200 in 14ms
 ```
 
 Trigger an event at the provider, or send one yourself:
