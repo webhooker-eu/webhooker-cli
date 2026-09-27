@@ -7,6 +7,7 @@
 
 <p align="center">
   <a href="https://webhooker.eu/">webhooker.eu</a> ·
+  <a href="https://webhooker.eu/cli">CLI page</a> ·
   <a href="#install">Install</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#commands">Commands</a> ·
