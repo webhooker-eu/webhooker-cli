@@ -1,6 +1,6 @@
 [package]
 name = "whk"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Webhooker CLI: manage sources, destinations and events, and relay webhooks to localhost"
 license = "MIT"

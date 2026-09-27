@@ -11,7 +11,7 @@
   <a href="#quick-start">Quick start</a> ·
   <a href="#commands">Commands</a> ·
   <a href="#faq">FAQ</a> ·
-  <a href="https://docs.webhooker.eu/">Docs</a> ·
+  <a href="https://docs.webhooker.eu/cli/overview/">Docs</a> ·
   <a href="https://github.com/webhooker-eu">More tools</a>
 </p>
 
@@ -42,6 +42,10 @@ the raw API response.
 
 `whk` is a single static binary. There is no runtime to install.
 
+Full documentation with screenshots: [Webhooker CLI docs](https://docs.webhooker.eu/cli/overview/),
+[command reference](https://docs.webhooker.eu/cli/commands/) and
+[terminal UI](https://docs.webhooker.eu/cli/terminal-ui/).
+
 ### Features
 
 | Feature | Description |
@@ -57,9 +61,34 @@ the raw API response.
 
 ## Install
 
+### Install script
+
+On Linux and macOS:
+
+```bash
+curl -fsSL https://webhooker.eu/install.sh | sh
+```
+
+On Windows, in PowerShell:
+
+```powershell
+irm https://webhooker.eu/install.ps1 | iex
+```
+
+The script picks the build for your OS and CPU, checks it against the SHA-256
+checksum published with the release and puts `whk` in `~/.local/bin`
+(`%LOCALAPPDATA%\Programs\whk` on Windows). It needs no root. To pin a release
+or choose the directory:
+
+```bash
+curl -fsSL https://webhooker.eu/install.sh | sh -s -- --version v0.1.1 --dir /usr/local/bin
+```
+
+In PowerShell, set `$env:WHK_VERSION` or `$env:WHK_INSTALL_DIR` before running it.
+
 ### Download a binary
 
-Grab the archive for your platform from the
+Or grab the archive for your platform from the
 [releases page](https://github.com/webhooker-eu/webhooker-cli/releases), unpack it and put `whk`
 on your `PATH`:
 
@@ -138,7 +167,7 @@ The step-by-step version is the
 ## Commands
 
 ```
-whk login | logout | whoami
+whk login | logout | whoami | ui
 whk tail SOURCE
 whk listen SOURCE --forward URL [--header 'Name: Value'] [--skip-verify]
 whk sources       ls | create | get | update | rm | trash | restore | rotate-token | url
@@ -146,9 +175,12 @@ whk destinations  ls | create | get | update | rm          (alias: dests)
 whk connections   ls | create | update | rm
 whk connect SOURCE DESTINATION [--filter JSON] [--transform JSON]
 whk events        ls | get | replay | replay-bulk
+whk dlq           summary | ls | resend
+whk stats         overview | by-source
 ```
 
-`whk <command> --help` lists every option. You can name a source by its name, id or ingest token.
+`whk <command> --help` lists every option, and the
+[command reference](https://docs.webhooker.eu/cli/commands/) documents all of them. You can name a source by its name, id or ingest token.
 You can name a destination by its name or id.
 
 ### Receive webhooks locally
@@ -334,7 +366,8 @@ event. `whk` is its official command-line client. We also publish free, open-sou
 people who work with webhooks.
 
 - Website: [webhooker.eu](https://webhooker.eu/)
-- Documentation: [docs.webhooker.eu](https://docs.webhooker.eu/)
+- Documentation: [docs.webhooker.eu](https://docs.webhooker.eu/), CLI section at
+  [docs.webhooker.eu/cli/overview](https://docs.webhooker.eu/cli/overview/)
 - Free webhook tools: [webhooker.eu/tools](https://webhooker.eu/tools)
 - More open-source tools: [github.com/webhooker-eu](https://github.com/webhooker-eu)
 - Need to see exactly what a provider sends? Try
