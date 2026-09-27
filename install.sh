@@ -107,6 +107,7 @@ main() {
 
     target=$(detect_target)
     archive_name="$BINARY_NAME-$target.tar.gz"
+    checksum_name="$BINARY_NAME-$target.sha256"
 
     if [ "$requested_version" = "latest" ]; then
         release_url="https://github.com/$REPOSITORY/releases/latest/download"
@@ -124,10 +125,10 @@ main() {
     say "Downloading $archive_name ($requested_version)"
     download "$release_url/$archive_name" "$temporary_directory/$archive_name" \
         || fail "download failed; check that release $requested_version exists"
-    download "$release_url/$archive_name.sha256" "$temporary_directory/$archive_name.sha256" \
+    download "$release_url/$checksum_name" "$temporary_directory/$checksum_name" \
         || fail "checksum file is missing for release $requested_version"
 
-    expected_checksum=$(cut -d ' ' -f 1 "$temporary_directory/$archive_name.sha256")
+    expected_checksum=$(cut -d ' ' -f 1 "$temporary_directory/$checksum_name")
     actual_checksum=$(sha256_of "$temporary_directory/$archive_name")
     [ "$expected_checksum" = "$actual_checksum" ] \
         || fail "checksum mismatch for $archive_name (expected $expected_checksum, got $actual_checksum)"
