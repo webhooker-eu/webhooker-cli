@@ -34,3 +34,15 @@ jobs:
           target: ${{ matrix.target }}
           token: ${{ secrets.GITHUB_TOKEN }}
           archive: whk-$target
+          checksum: sha256
+
+  install-scripts:
+    needs: cli
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: gh release upload "$GITHUB_REF_NAME" install.sh install.ps1 --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
