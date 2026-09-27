@@ -61,6 +61,9 @@ Full documentation with screenshots: [Webhooker CLI docs](https://docs.webhooker
 
 ## Install
 
+The same commands, with a copy button for each platform, are on
+[webhooker.eu/cli](https://webhooker.eu/cli).
+
 ### Install script
 
 On Linux and macOS:
