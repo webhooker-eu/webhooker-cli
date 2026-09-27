@@ -5,7 +5,7 @@ expression: "draw(&dark, 80, 24).backend().buffer()"
 Buffer {
     area: Rect { x: 0, y: 0, width: 80, height: 24 },
     content: [
-        "  ▄▀▀▄ █▄ ▄█   Webhooker CLI v0.1.0                                             ",
+        "  ▄▀▀▄ █▄ ▄█   Webhooker CLI v[version] ",
         "  ▀▄▄▀ █ ▀ █   acme · pro · app.webhooker.eu                                    ",
         " Sources Dests Conns Events DLQ Stats Relay Settings                            ",
         "┌ Sources ─────────────────────────────────────────────────────────────────────┐",

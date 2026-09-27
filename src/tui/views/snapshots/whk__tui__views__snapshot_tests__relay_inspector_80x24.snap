@@ -2,7 +2,7 @@
 source: src/tui/views/snapshot_tests.rs
 expression: "draw(app, width, height).backend()"
 ---
-"  ▄▀▀▄ █▄ ▄█   Webhooker CLI v0.1.0                                             "
+"  ▄▀▀▄ █▄ ▄█   Webhooker CLI v[version] "
 "  ▀▄▄▀ █ ▀ █   acme · pro · app.webhooker.eu      ⇄ relay stripe-prod → :3000 ● "
 " Sources Dests Conns Events DLQ Stats Relay Settings                            "
 "┌ Relay · stripe-prod → http://localhost:3000 ────────────────── 2 fwd · 1 err ┐"
